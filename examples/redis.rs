@@ -23,10 +23,10 @@ pub fn main() {
 
     let mut lp = Core::new().unwrap();
 
-    //let resolver = DnsResolver::system_config(&lp.handle())
-    //    .expect("initialize DNS resolver");
-    let mut resolver = abstract_ns::StubResolver::new();
-    resolver.add_host("localhost", "127.0.0.1".parse().unwrap());
+    let resolver = DnsResolver::system_config(&lp.handle())
+        .expect("initialize DNS resolver");
+    //let mut resolver = abstract_ns::StubResolver::new();
+    //resolver.add_host("localhost", "127.0.0.1".parse().unwrap());
     let handle = lp.handle();
     let handle2 = lp.handle();
     let handle3 = lp.handle();

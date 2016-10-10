@@ -30,17 +30,20 @@ impl<S: Service + 'static> ConnectionPool<S> {
         let pool = Rc::new(RefCell::new(PoolImpl {
             connections: VecDeque::new(),
         }));
-        handle.spawn(addr.fold((pool.clone(), connect),
-            |(pool, connect), addr| {
-                addr.pick_one().map(|addr| {
-                    pool.borrow_mut().connections
-                        .push_back(connect.connect(addr))
-                });
-                Ok((pool, connect))
-            }).map_err(|_| {
-                println!("Stream error");
-            }).map(|_| {
-                println!("Stream ended");
+        handle.spawn(addr
+            .then(|res| Ok::<_, ()>(res))
+            .fold((pool.clone(), connect),
+                |(pool, connect), res| {
+                    res.ok()
+                        .and_then(|x| x.pick_one())
+                        .map(|addr| {
+                            pool.borrow_mut().connections
+                                .push_back(connect.connect(addr))
+                        });
+                    Ok((pool, connect))
+                })
+            .then(|_| -> Result<_,_> {
+                unreachable!();
             }));
         return ConnectionPool(pool);
     }

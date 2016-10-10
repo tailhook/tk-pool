@@ -13,7 +13,7 @@ authors = ["paul@colomiets.name"]
 
 [dependencies]
 futures = "0.1.1"
-abstract-ns = { git="git://github.com/tailhook/abstract-ns", rev="9de9000" }
+abstract-ns = { git="git://github.com/tailhook/abstract-ns", rev="6419952" }
 tokio-core = { git="git://github.com/tailhook/tokio-core", branch="intervals" }
 tokio-proto = { git="git://github.com/tokio-rs/tokio-proto", rev="a0998dc" }
 tokio-service = { git="git://github.com/tokio-rs/tokio-service", rev="6d7cf21" }
@@ -23,7 +23,7 @@ quick-error = "1.1.0"
 argparse = "0.2.1"
 env_logger = "0.3.5"
 tokio-redis = { git="git://github.com/tailhook/tokio-redis", rev="ffd4cb1" }
-ns-dns-tokio = { git = "https://github.com/tailhook/abstract-ns", rev="9de9000" }
+ns-dns-tokio = { git = "https://github.com/tailhook/abstract-ns", rev="6419952" }
 
 [replace]
 "tokio-service:0.1.0" = { git="git://github.com/tokio-rs/tokio-service", rev="6d7cf21" }
