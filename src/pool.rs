@@ -10,7 +10,6 @@ use futures::{Async, Future};
 use futures::stream::Stream;
 
 
-#[derive(Clone)]
 pub struct ConnectionPool<S: Service>(Rc<RefCell<PoolImpl<S>>>);
 
 pub struct PoolImpl<S: Service> {
@@ -75,5 +74,11 @@ impl<S: Service> Service for ConnectionPool<S> {
         }
         // TODO(tailhook) check poll_ready at connections in the pool
         return Async::Ready(());
+    }
+}
+
+impl<S: Service> Clone for ConnectionPool<S> {
+    fn clone(&self) -> ConnectionPool<S> {
+        ConnectionPool(self.0.clone())
     }
 }
