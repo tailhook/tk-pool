@@ -12,22 +12,17 @@ version = "0.1.0"
 authors = ["paul@colomiets.name"]
 
 [dependencies]
-futures = "0.1.1"
-abstract-ns = { git="git://github.com/tailhook/abstract-ns", rev="6419952" }
-tokio-core = { git="git://github.com/tailhook/tokio-core", branch="intervals" }
-tokio-proto = { git="git://github.com/tokio-rs/tokio-proto", rev="a0998dc" }
-tokio-service = { git="git://github.com/tokio-rs/tokio-service", rev="6d7cf21" }
+futures = "0.1.6"
+abstract-ns = "0.2.1"
+tokio-core = "0.1.1"
 quick-error = "1.1.0"
 
 [dev-dependencies]
 argparse = "0.2.1"
 env_logger = "0.3.5"
-tokio-redis = { git="git://github.com/tailhook/tokio-redis", rev="ffd4cb1" }
-ns-dns-tokio = { git = "https://github.com/tailhook/abstract-ns", rev="6419952" }
+ns-dns-tokio = "0.1.0"
+minihttp = { git="https://github.com/popravich/minihttp", rev="fe120a3" }
 
-[replace]
-"tokio-service:0.1.0" = { git="git://github.com/tokio-rs/tokio-service", rev="6d7cf21" }
-"tokio-core:0.1.0" = { git="git://github.com/tailhook/tokio-core", branch="intervals" }
 
 [lib]
 name = "tk_pool"
