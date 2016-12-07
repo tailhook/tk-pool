@@ -13,22 +13,23 @@ use futures::Future;
 use futures::future::join_all;
 use tk_pool::uniform::{Pool, Config as PConfig};
 use tokio_core::net::TcpStream;
-use minihttp::client::{Proto, Config as HConfig, Client};
+use minihttp::client::{Proto, Config as HConfig, Client, Error};
 
 fn main() {
-    let lp = tokio_core::reactor::Core::new().unwrap();
+    let mut lp = tokio_core::reactor::Core::new().unwrap();
     let handle = lp.handle();
 
     let ns = ns_std_threaded::ThreadedResolver::new(
         futures_cpupool::CpuPool::new(1));
-    let pool = Pool::new(&Arc::new(PConfig::new()),
+    let mut pool = Pool::new(&Arc::new(PConfig::new()),
         &handle,
         ns.subscribe("httpbin.org"),
         |addr| {
             TcpStream::connect(&addr, &handle)
             .map(|c| Proto::new(c, &Arc::new(HConfig::new())))
+            .map_err(Error::Io)
         });
-    lp.run(join_all((0..10).map(|_| {
+    lp.run(join_all((0..10).map(move |_| {
         Client::fetch_url(&mut pool, "http://httpbin.org/delay/5")
             .map(|r| {
                 println!("Received {} bytes", r.body().unwrap().len())

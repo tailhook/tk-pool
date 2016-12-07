@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::collections::VecDeque;
 
-use abstract_ns::Address;
+use abstract_ns::{self, Address};
 use tokio_core::reactor::Handle;
 use futures::{StartSend, Async, Future, BoxFuture, Poll};
 use futures::sink::{Sink};
@@ -23,8 +23,8 @@ use {Connect};
 /// Note the pool has neither a buffer of it's own nor any internal tasks, so
 /// you are expected to use `Sink::buffer` and call `poll_complete` on every
 /// wake-up.
-pub struct Pool<S, E> {
-    address: BoxStream<Address, E>,
+pub struct Pool<S, E, A=abstract_ns::Error> {
+    address: BoxStream<Address, A>,
     active: VecDeque<S>,
     pending: VecDeque<BoxFuture<S, E>>,
     config: Arc<Config>,
@@ -73,18 +73,19 @@ impl Config {
     }
 }
 
-impl<S, E> Pool<S, E>
-    where S: Sink,
-          <S as Sink>::SinkError: Into<E>,
+impl<S, E, A> Pool<S, E, A>
+    where S: Sink<SinkError=E>,
+          A: Into<E>
 {
     /// Create a connection pool
     ///
     /// This doesn't establish any connections even in eager mode. You need
     /// to call `poll_complete` to start.
     pub fn new<C>(config: &Arc<Config>, handle: &Handle,
-           address: BoxStream<Address, E>, connect: C)
-        -> Pool<S, E>
-        where C: Connect
+           address: BoxStream<Address, A>, connect: C)
+        -> Pool<S, E, A>
+        where C: Connect,
+              C::Future: Future<Item=S, Error=E>,
     {
         Pool {
             address: address,
@@ -96,11 +97,12 @@ impl<S, E> Pool<S, E>
     }
 }
 
-impl<S, E> Sink for Pool<S, E>
-    where S: Sink<SinkError=E>
+impl<S, E, A> Sink for Pool<S, E, A>
+    where S: Sink<SinkError=E>,
+          A: Into<E>,
 {
     type SinkItem = S::SinkItem;
-    type SinkError = E;
+    type SinkError = S::SinkError;
     fn start_send(&mut self, item: Self::SinkItem)
         -> StartSend<Self::SinkItem, Self::SinkError>
     {

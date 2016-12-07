@@ -22,7 +22,7 @@ argparse = "0.2.1"
 env_logger = "0.3.5"
 ns-std-threaded = "0.1.0"
 futures-cpupool = "0.1.2"
-minihttp = { git="https://github.com/popravich/minihttp", rev="4c2d9fc" }
+minihttp = { git="https://github.com/popravich/minihttp", rev="fc0eb90" }
 
 
 [lib]
