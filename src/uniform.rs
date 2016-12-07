@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 
 use abstract_ns::{self, Address};
 use tokio_core::reactor::Handle;
-use futures::{StartSend, Async, Future, BoxFuture, Poll};
+use futures::{StartSend, AsyncSink, Async, Future, BoxFuture, Poll};
 use futures::sink::{Sink};
 use futures::stream::{Stream, BoxStream};
 
@@ -25,8 +25,10 @@ use {Connect};
 /// wake-up.
 pub struct Pool<S, E, A=abstract_ns::Error> {
     address: BoxStream<Address, A>,
-    active: VecDeque<S>,
-    pending: VecDeque<BoxFuture<S, E>>,
+    cur_address: Option<Address>,
+    active: VecDeque<(SocketAddr, S)>,
+    pending: VecDeque<(SocketAddr, BoxFuture<S, E>)>,
+    retired: VecDeque<S>,
     config: Arc<Config>,
     handle: Handle,
 }
@@ -95,7 +97,74 @@ impl<S, E, A> Pool<S, E, A>
             handle: handle.clone(),
         }
     }
+
+    fn try_send(&mut self, mut item: S::SinkItem)
+        -> Result<AsyncSink<S::SinkItem>, E>
+    {
+        for _ in 0..self.active.len() {
+            let mut c = self.active.pop_front().unwrap();
+            item = match c.start_send(item)? {
+                AsyncSink::NotReady(item) => {
+                    self.active.push_back(c);
+                    item
+                }
+                AsyncSink::Ready => {
+                    self.active.push_back(c);
+                    return Ok(AsyncSink::Ready);
+                }
+            };
+        }
+        Ok(AsyncSink::NotReady(item))
+    }
+    /// Returns `true` if new connection became active
+    fn do_poll(&mut self) -> Result<bool, E> {
+
+        match self.address.poll()? {
+            Ok(a) => {
+                unimplemented!();
+            }
+            Err(e) => {
+                // TODO(tailhook) poll crashes on address error?
+                return Err(e.into());
+            }
+        }
+        let mut added = false;
+        for _ in 0..self.pending.len() {
+            let mut c = self.pending.pop_front().unwrap();
+            match c.poll() {
+                Ok(Async::Ready(c)) => {
+                    // Can use it immediately
+                    self.active.push_front(c);
+                    added = true;
+                }
+                Ok(Async::NotReady) => {
+                    self.pending.push_back(c);
+                }
+                Err(e) => {
+                    info!("Can't establish connection to {:?}: {}",
+                        "unknown", e); // TODO(tailhook)
+                }
+            }
+        }
+        for _ in 0..self.active.len() {
+            let mut c = self.active.pop_front().unwrap();
+            match c.poll_complete() {
+                Ok(_) => self.active.push_back(c),
+                Err(e) => {
+                    info!("Connection to {:?} has been closed: {}",
+                        "unknown", e); // TODO(tailhook)
+                }
+            }
+        }
+        Ok(added)
+    }
+    /// Initiate a connection
+    fn do_connect(&mut self) {
+        //if self.active.len() + self.pending.len() == self.
+        unimplemented!();
+    }
 }
+
 
 impl<S, E, A> Sink for Pool<S, E, A>
     where S: Sink<SinkError=E>,
@@ -106,10 +175,28 @@ impl<S, E, A> Sink for Pool<S, E, A>
     fn start_send(&mut self, item: Self::SinkItem)
         -> StartSend<Self::SinkItem, Self::SinkError>
     {
-        unimplemented!();
+        let item = match self.try_send(item)? {
+            AsyncSink::NotReady(item) => item,
+            AsyncSink::Ready => return Ok(AsyncSink::Ready),
+        };
+        let item = if self.do_poll()? {
+            match self.try_send(item)? {
+                AsyncSink::NotReady(item) => item,
+                AsyncSink::Ready => return Ok(AsyncSink::Ready),
+            }
+        } else {
+            self.do_connect();
+            item
+        };
+        Ok(AsyncSink::NotReady(item))
     }
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError>
     {
-        unimplemented!();
+        if !self.lazy_connections {
+            self.do_connect();
+        }
+        self.do_poll()?;
+        // Basically we're never ready
+        Ok(Async::NotReady)
     }
 }

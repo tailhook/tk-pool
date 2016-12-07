@@ -13,16 +13,17 @@ authors = ["paul@colomiets.name"]
 
 [dependencies]
 futures = "0.1.6"
-abstract-ns = "0.2.1"
+abstract-ns = "0.2.3"
 tokio-core = "0.1.1"
 quick-error = "1.1.0"
+log = "0.3.6"
 
 [dev-dependencies]
 argparse = "0.2.1"
 env_logger = "0.3.5"
 ns-std-threaded = "0.1.0"
 futures-cpupool = "0.1.2"
-minihttp = { git="https://github.com/popravich/minihttp", rev="fc0eb90" }
+minihttp = { git="https://github.com/popravich/minihttp", rev="d01a391" }
 
 
 [lib]

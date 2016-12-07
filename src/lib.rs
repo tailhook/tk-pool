@@ -7,6 +7,7 @@
 //! `Sink<(Request, Sender<Reply>)>`.
 //!
 #[warn(missing_docs)]
+#[macro_use] extern crate log;
 extern crate futures;
 extern crate abstract_ns;
 extern crate tokio_core;
