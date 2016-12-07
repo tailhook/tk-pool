@@ -11,4 +11,7 @@ extern crate futures;
 extern crate abstract_ns;
 extern crate tokio_core;
 
+mod connect;
 pub mod uniform;
+
+pub use connect::Connect;

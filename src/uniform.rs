@@ -11,6 +11,8 @@ use futures::{StartSend, Async, Future, BoxFuture, Poll};
 use futures::sink::{Sink};
 use futures::stream::{Stream, BoxStream};
 
+use {Connect};
+
 
 /// A simple uniform connection pool
 ///
@@ -79,9 +81,10 @@ impl<S, E> Pool<S, E>
     ///
     /// This doesn't establish any connections even in eager mode. You need
     /// to call `poll_complete` to start.
-    fn new(config: &Arc<Config>, handle: &Handle,
-           address: BoxStream<Address, E>, connect: Connect<S, E>)
+    pub fn new<C>(config: &Arc<Config>, handle: &Handle,
+           address: BoxStream<Address, E>, connect: C)
         -> Pool<S, E>
+        where C: Connect
     {
         Pool {
             address: address,
