@@ -17,6 +17,7 @@ abstract-ns = "0.2.3"
 tokio-core = "0.1.1"
 quick-error = "1.1.0"
 log = "0.3.6"
+rand = "0.3.15"
 
 [dev-dependencies]
 argparse = "0.2.1"

@@ -1,13 +1,15 @@
 //! This module provides and uniform connection pool implementation,
 //! which means we create a fixed number of connections for each IP/Port pair
 //! and distribute requests by round-robin
+use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::collections::VecDeque;
 
+use rand::{thread_rng, Rng};
 use abstract_ns::{self, Address};
 use tokio_core::reactor::Handle;
-use futures::{StartSend, AsyncSink, Async, Future, BoxFuture, Poll};
+use futures::{StartSend, AsyncSink, Async, Future, Poll};
 use futures::sink::{Sink};
 use futures::stream::{Stream, BoxStream};
 
@@ -25,9 +27,11 @@ use {Connect};
 /// wake-up.
 pub struct Pool<S, E, A=abstract_ns::Error> {
     address: BoxStream<Address, A>,
+    connect: Box<Connect<Sink=S, Error=E>>,
     cur_address: Option<Address>,
     active: VecDeque<(SocketAddr, S)>,
-    pending: VecDeque<(SocketAddr, BoxFuture<S, E>)>,
+    pending: VecDeque<(SocketAddr, Box<Future<Item=S, Error=E>>)>,
+    candidates: Vec<SocketAddr>,
     retired: VecDeque<S>,
     config: Arc<Config>,
     handle: Handle,
@@ -84,7 +88,7 @@ impl Config {
 
 impl<S, E, A> Pool<S, E, A>
     where S: Sink<SinkError=E>,
-          A: Into<E>
+          E: From<A> + fmt::Display
 {
     /// Create a connection pool
     ///
@@ -93,15 +97,18 @@ impl<S, E, A> Pool<S, E, A>
     pub fn new<C>(config: &Arc<Config>, handle: &Handle,
            address: BoxStream<Address, A>, connect: C)
         -> Pool<S, E, A>
-        where C: Connect,
-              C::Future: Future<Item=S, Error=E>,
+        where C: Connect<Sink=S, Error=E> + 'static
     {
         Pool {
             address: address,
+            connect: Box::new(connect),
             active: VecDeque::new(),
             pending: VecDeque::new(),
             config: config.clone(),
             handle: handle.clone(),
+            cur_address: None,
+            candidates: Vec::new(),
+            retired: VecDeque::new(),
         }
     }
 
@@ -109,14 +116,14 @@ impl<S, E, A> Pool<S, E, A>
         -> Result<AsyncSink<S::SinkItem>, E>
     {
         for _ in 0..self.active.len() {
-            let mut c = self.active.pop_front().unwrap();
+            let (a, mut c) = self.active.pop_front().unwrap();
             item = match c.start_send(item)? {
                 AsyncSink::NotReady(item) => {
-                    self.active.push_back(c);
+                    self.active.push_back((a, c));
                     item
                 }
                 AsyncSink::Ready => {
-                    self.active.push_back(c);
+                    self.active.push_back((a, c));
                     return Ok(AsyncSink::Ready);
                 }
             };
@@ -125,57 +132,125 @@ impl<S, E, A> Pool<S, E, A>
     }
     /// Returns `true` if new connection became active
     fn do_poll(&mut self) -> Result<bool, E> {
-
-        match self.address.poll()? {
-            Ok(a) => {
-                unimplemented!();
+        match self.address.poll() {
+            Ok(Async::Ready(Some(new_addr))) => {
+                if let Some(ref mut old_addr) = self.cur_address {
+                    if old_addr != &new_addr {
+                        // Retire connections immediately, but connect later
+                        let (old, new) = old_addr.at(0)
+                                       .compare_addresses(&new_addr.at(0));
+                        for _ in 0..self.pending.len() {
+                            let (addr, c) = self.pending.pop_front().unwrap();
+                            // Drop pending connections to non-existing addresses
+                            if !old.contains(&addr) {
+                                self.pending.push_back((addr, c));
+                            }
+                        }
+                        for _ in 0..self.active.len() {
+                            let (addr, c) = self.active.pop_front().unwrap();
+                            // Active connections are waiting to become idle
+                            if old.contains(&addr) {
+                                self.retired.push_back(c);
+                            } else {
+                                self.active.push_back((addr, c));
+                            }
+                        }
+                        // New addresses go to the front of the list but
+                        // we randomize their order
+                        for _ in 0..self.config.connections_per_address {
+                            let off = self.candidates.len();
+                            for &a in &new {
+                                self.candidates.push(a);
+                            }
+                            thread_rng().shuffle(&mut self.candidates[off..]);
+                        }
+                        *old_addr = new_addr;
+                    }
+                } else {
+                    // We randomize order of the connections, but make sure
+                    // that no connection connects twice unless all other are
+                    // connected at least once
+                    for _ in 0..self.config.connections_per_address {
+                        let off = self.candidates.len();
+                        for a in new_addr.at(0).addresses() {
+                            self.candidates.push(a);
+                        }
+                        thread_rng().shuffle(&mut self.candidates[off..]);
+                    }
+                    self.cur_address = Some(new_addr);
+                }
+            },
+            Ok(Async::NotReady) => {}
+            Ok(Async::Ready(None)) => {
+                panic!("Address stream must be infinite");
             }
             Err(e) => {
                 // TODO(tailhook) poll crashes on address error?
                 return Err(e.into());
             }
         }
+        for _ in 0..self.retired.len() {
+            let mut c = self.retired.pop_front().unwrap();
+            match c.poll_complete() {
+                Ok(Async::Ready(())) => {}
+                Ok(Async::NotReady) => {
+                    self.retired.push_back(c);
+                }
+                Err(_) => {}  // TODO(tailhook) may be log crashes?
+            }
+        }
         let mut added = false;
         for _ in 0..self.pending.len() {
-            let mut c = self.pending.pop_front().unwrap();
+            let (a, mut c) = self.pending.pop_front().unwrap();
             match c.poll() {
                 Ok(Async::Ready(c)) => {
                     // Can use it immediately
-                    self.active.push_front(c);
+                    self.active.push_front((a, c));
                     added = true;
                 }
                 Ok(Async::NotReady) => {
-                    self.pending.push_back(c);
+                    self.pending.push_back((a, c));
                 }
                 Err(e) => {
-                    info!("Can't establish connection to {:?}: {}",
-                        "unknown", e); // TODO(tailhook)
+                    info!("Can't establish connection to {:?}: {}", a, e);
+                    // Add to the end of the list
+                    self.candidates.insert(0, a);
                 }
             }
         }
         for _ in 0..self.active.len() {
-            let mut c = self.active.pop_front().unwrap();
+            let (a, mut c) = self.active.pop_front().unwrap();
             match c.poll_complete() {
-                Ok(_) => self.active.push_back(c),
+                Ok(_) => self.active.push_back((a, c)),
                 Err(e) => {
-                    info!("Connection to {:?} has been closed: {}",
-                        "unknown", e); // TODO(tailhook)
+                    info!("Connection to {:?} has been closed: {}", a, e);
+                    // Add to the end of the list
+                    self.candidates.insert(0, a);
                 }
             }
         }
         Ok(added)
     }
-    /// Initiate a connection
+    /// Initiate a connection(s)
     fn do_connect(&mut self) {
-        //if self.active.len() + self.pending.len() == self.
-        unimplemented!();
+        // TODO(tailhook) implement some timeouts for failing connections
+        if self.config.lazy_connections {
+            if let Some(addr) = self.candidates.pop() {
+                self.pending.push_back((addr, self.connect.connect(addr)));
+            }
+        } else {
+            while let Some(addr) = self.candidates.pop() {
+                self.pending.push_back((addr, self.connect.connect(addr)));
+            }
+        }
+        self.candidates.shrink_to_fit();
     }
 }
 
 
 impl<S, E, A> Sink for Pool<S, E, A>
     where S: Sink<SinkError=E>,
-          A: Into<E>,
+          E: From<A> + fmt::Display,
 {
     type SinkItem = S::SinkItem;
     type SinkError = S::SinkError;
@@ -199,7 +274,7 @@ impl<S, E, A> Sink for Pool<S, E, A>
     }
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError>
     {
-        if !self.lazy_connections {
+        if !self.config.lazy_connections {
             self.do_connect();
         }
         self.do_poll()?;
