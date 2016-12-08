@@ -69,6 +69,13 @@ impl Config {
     /// Lazy connections are enabled by default because it what makes most
     /// sense if you have `HashMap<Hostname, Pool>` and this is how most
     /// connections pools work in other languages.
+    ///
+    /// Note that pool with lazy connections will return NotReady when there
+    /// are free connections, but starts a new ones asynchronously. Also it
+    /// will not establish new connections when there are no backpressure on
+    /// existing connections even if not all peers are connected to yet. So you
+    /// may get a skew in cluster load, especially if you support may
+    /// pipelined requests on a single connection.
     pub fn eager_connections(&mut self) -> &mut Self {
         self.lazy_connections = false;
         self
