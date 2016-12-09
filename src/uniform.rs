@@ -25,7 +25,7 @@ use {Connect};
 /// Note the pool has neither a buffer of it's own nor any internal tasks, so
 /// you are expected to use `Sink::buffer` and call `poll_complete` on every
 /// wake-up.
-pub struct Pool<S, E, A=abstract_ns::Error> {
+pub struct UniformMx<S, E, A=abstract_ns::Error> {
     address: BoxStream<Address, A>,
     connect: Box<Connect<Sink=S, Error=E>>,
     cur_address: Option<Address>,
@@ -72,7 +72,7 @@ impl Config {
     /// only when there are no other connections that can serve a request.
     ///
     /// Lazy connections are enabled by default because it what makes most
-    /// sense if you have `HashMap<Hostname, Pool>` and this is how most
+    /// sense if you have `HashMap<Hostname, UniformMx>` and this is how most
     /// connections pools work in other languages.
     ///
     /// Note that pool with lazy connections will return NotReady when there
@@ -85,13 +85,30 @@ impl Config {
         self.lazy_connections = false;
         self
     }
+    /// Set the number of connections per address
+    ///
+    /// This kind of limit may look awkward for a connection pool. You used
+    /// to opening fixed number of connections per connection pool rather
+    /// than per backend address. But consider there are lots of workers
+    /// (say 100 or 1000), and every worker has limited number of resources.
+    /// So you want to have a number of connections proportional to actual
+    /// workers there rather than arbitrarily chosen number of connections.
+    ///
+    /// Surely it doesn't work well for other cases. This is why we have
+    /// multiple multiplexer implementations.
     pub fn connections_per_address(&mut self, n: usize) -> &mut Self {
         self.connections_per_address = n;
         self
     }
+    /// Create a Arc'd config clone to pass to the constructor
+    ///
+    /// This is just a convenience method.
+    pub fn done(&mut self) -> Arc<Config> {
+        Arc::new(self.clone())
+    }
 }
 
-impl<S, E, A> Pool<S, E, A>
+impl<S, E, A> UniformMx<S, E, A>
     where S: Sink<SinkError=E>,
           E: From<A> + fmt::Display
 {
@@ -99,12 +116,12 @@ impl<S, E, A> Pool<S, E, A>
     ///
     /// This doesn't establish any connections even in eager mode. You need
     /// to call `poll_complete` to start.
-    pub fn new<C>(config: &Arc<Config>, handle: &Handle,
+    pub fn new<C>(handle: &Handle, config: &Arc<Config>,
            address: BoxStream<Address, A>, connect: C)
-        -> Pool<S, E, A>
+        -> UniformMx<S, E, A>
         where C: Connect<Sink=S, Error=E> + 'static
     {
-        Pool {
+        UniformMx {
             address: address,
             connect: Box::new(connect),
             active: VecDeque::new(),
@@ -136,7 +153,7 @@ impl<S, E, A> Pool<S, E, A>
         Ok(AsyncSink::NotReady(item))
     }
     /// Returns `true` if new connection became active
-    fn do_poll(&mut self) -> Result<bool, E> {
+    fn do_poll(&mut self) -> Result<(), E> {
         match self.address.poll() {
             Ok(Async::Ready(Some(new_addr))) => {
                 if let Some(ref mut old_addr) = self.cur_address {
@@ -148,7 +165,8 @@ impl<S, E, A> Pool<S, E, A>
                                 to be connected {:?}", old, new);
                         for _ in 0..self.pending.len() {
                             let (addr, c) = self.pending.pop_front().unwrap();
-                            // Drop pending connections to non-existing addresses
+                            // Drop pending connections to non-existing
+                            // addresses
                             if !old.contains(&addr) {
                                 self.pending.push_back((addr, c));
                             } else {
@@ -220,7 +238,8 @@ impl<S, E, A> Pool<S, E, A>
                 }
             }
         }
-        Ok(self.poll_pending())
+        self.poll_pending();
+        Ok(())
     }
 
     fn poll_pending(&mut self) -> bool {
@@ -269,7 +288,7 @@ impl<S, E, A> Pool<S, E, A>
 }
 
 
-impl<S, E, A> Sink for Pool<S, E, A>
+impl<S, E, A> Sink for UniformMx<S, E, A>
     where S: Sink<SinkError=E>,
           E: From<A> + fmt::Display,
 {
@@ -278,19 +297,12 @@ impl<S, E, A> Sink for Pool<S, E, A>
     fn start_send(&mut self, item: Self::SinkItem)
         -> StartSend<Self::SinkItem, Self::SinkError>
     {
+        self.do_poll()?;
         let item = match self.try_send(item)? {
             AsyncSink::NotReady(item) => item,
             AsyncSink::Ready => return Ok(AsyncSink::Ready),
         };
-        let item = if self.do_poll()? {
-            match self.try_send(item)? {
-                AsyncSink::NotReady(item) => item,
-                AsyncSink::Ready => return Ok(AsyncSink::Ready),
-            }
-        } else {
-            self.do_connect();
-            item
-        };
+        self.do_connect();
         Ok(AsyncSink::NotReady(item))
     }
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError>
