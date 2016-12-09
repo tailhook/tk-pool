@@ -2,8 +2,9 @@
 Tk-Pool
 =======
 
-:Status: Pre-Alpha
-:Documentation: `See examples <http://github.com/tailhook/tk-pool>`_
+:Status: Alpha
+:Documentation: https://docs.rs/tk-pool/
+:Examples: `HTTP <https://github.com/tailhook/tk-pool/blob/master/examples/http.rs>`_
 
 
 A connection pool implementation for tokio.
