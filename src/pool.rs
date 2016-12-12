@@ -45,7 +45,7 @@ impl<M> Pool<M> {
         let fut = rx.map_err(|_| -> E {
             // channel receive never fails
             unreachable!();
-        }).map(|x| { println!("GOT ITEM"); x }).forward(multiplexer).map_err(|e| {
+        }).forward(multiplexer).map_err(|e| {
             error!("Connection pool crashed with error: {}", e);
         }).map(|(_sink, _stream)| ());
         handle.spawn(fut);
