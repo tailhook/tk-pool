@@ -1,10 +1,8 @@
 //! This is a collection of different connection pool implementations
 //!
-//! Concepts
-//! ========
+//! # Concepts
 //!
-//! Mutliplexer
-//! -----------
+//! ## Mutliplexer
 //!
 //! Multiplexer is basically a strategy of how we establish connections,
 //! distribute the load, reconnect in case of failure and process name service
@@ -21,8 +19,7 @@
 //! multiplexer should be used via `Pool`.
 //!
 //!
-//! Pool
-//! ----
+//! ## Pool
 //!
 //! Pool is an object that is convenient to use for client connections. It
 //! will spawn a future that processes requests and establish a channel to it.
@@ -39,9 +36,22 @@
 //! simple methods like `fetch_url` on the `Sink`. So the method applies
 //! both to connection pools and to individual connections.
 //!
+//! # Example
 //!
-//! Notes
-//! =====
+//! ```rust,ignore
+//! let pool_config = PConfig::new()
+//!     .connections_per_address(2)
+//!     .done();
+//! let multiplexer = UniformMx::new(
+//!     &h1,
+//!     &pool_config,
+//!     ns.subscribe("example.org:80"),
+//!     move |addr| Proto::connect_tcp(addr, &connection_config, &h2));
+//! let queue_size = 10;
+//! let mut pool = Pool::create(&lp.handle(), queue_size, multiplexer);
+//! ```
+//!
+//! # Notes
 //!
 //! Note the API is still in flux.
 //!

@@ -35,10 +35,12 @@ fn main() {
     let connection_config = HConfig::new()
         .inflight_request_limit(1)
         .done();
-    let mut pool = Pool::create(&lp.handle(), 10, UniformMx::new(&h1,
-            &pool_config,
-            ns.subscribe("httpbin.org:80"),
-            move |addr| Proto::connect_tcp(addr, &connection_config, &h2)));
+    let multiplexer = UniformMx::new(&h1,
+        &pool_config,
+        ns.subscribe("httpbin.org:80"),
+        move |addr| Proto::connect_tcp(addr, &connection_config, &h2));
+    let queue_size = 10;
+    let mut pool = Pool::create(&lp.handle(), queue_size, multiplexer);
 
     println!("We will send 10 requests over 2 connections (per ip). \
               Each requests hangs for 5 seconds at the server side \
