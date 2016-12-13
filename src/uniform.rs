@@ -11,7 +11,7 @@ use abstract_ns::{self, Address};
 use tokio_core::reactor::Handle;
 use futures::{StartSend, AsyncSink, Async, Future, Poll};
 use futures::sink::{Sink};
-use futures::stream::{Stream, BoxStream};
+use futures::stream::Stream;
 
 use {Connect};
 
@@ -26,7 +26,7 @@ use {Connect};
 /// you are expected to use `Sink::buffer` and call `poll_complete` on every
 /// wake-up.
 pub struct UniformMx<S, E, A=abstract_ns::Error> {
-    address: BoxStream<Address, A>,
+    address: Box<Stream<Item=Address, Error=A>>,
     connect: Box<Connect<Sink=S, Error=E>>,
     cur_address: Option<Address>,
     active: VecDeque<(SocketAddr, S)>,
@@ -117,7 +117,7 @@ impl<S, E, A> UniformMx<S, E, A>
     /// This doesn't establish any connections even in eager mode. You need
     /// to call `poll_complete` to start.
     pub fn new<C>(handle: &Handle, config: &Arc<Config>,
-           address: BoxStream<Address, A>, connect: C)
+           address: Box<Stream<Item=Address, Error=A>>, connect: C)
         -> UniformMx<S, E, A>
         where C: Connect<Sink=S, Error=E> + 'static
     {
