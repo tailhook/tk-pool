@@ -15,6 +15,7 @@ use tokio_core::reactor::Handle;
 ///
 /// It's still a `Sink` and you are free to implement `Service` or whatever
 /// high level interfaces apply for your protocol.
+#[derive(Clone)]
 pub struct Pool<M> {
     channel: Sender<M>,
 }
