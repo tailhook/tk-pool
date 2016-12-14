@@ -8,7 +8,7 @@ readme = "README.rst"
 keywords = ["tokio", "connection-pool", "TCP", "connection", "pool"]
 homepage = "http://github.com/tailhook/tk-pool"
 documentation = "http://docs.rs/tk-pool"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["paul@colomiets.name"]
 
 [dependencies]
