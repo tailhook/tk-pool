@@ -15,11 +15,9 @@ use tokio_core::reactor::Handle;
 ///
 /// It's still a `Sink` and you are free to implement `Service` or whatever
 /// high level interfaces apply for your protocol.
-#[derive(Clone)]
 pub struct Pool<M> {
     channel: Sender<M>,
 }
-
 
 impl<M> Pool<M> {
 
@@ -78,5 +76,13 @@ impl<M> Sink for Pool<M> {
             // to construct a value from nothing
             unreachable!();
         })
+    }
+}
+
+impl<M> Clone for Pool<M> {
+    fn clone(&self) -> Self {
+        Pool {
+            channel: self.channel.clone(),
+        }
     }
 }
