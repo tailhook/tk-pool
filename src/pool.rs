@@ -2,9 +2,9 @@ use std::fmt;
 
 use futures::sync::mpsc::{channel, Sender, SendError};
 use futures::sink::Sink;
-use futures::stream::Stream;
+use futures::stream::{Stream, Fuse};
 use futures::future::Future;
-use futures::{StartSend, Poll};
+use futures::{StartSend, Poll, Async, AsyncSink};
 use tokio_core::reactor::Handle;
 
 
@@ -17,6 +17,15 @@ use tokio_core::reactor::Handle;
 /// high level interfaces apply for your protocol.
 pub struct Pool<M> {
     channel: Sender<M>,
+}
+
+// This is similar to `futures::stream::Forward` but also calls poll_complete
+// on wakeups. This is important to keep connection pool up to date when
+// no new requests are coming in.
+struct Forwarder<T: Stream, K: Sink<SinkItem=T::Item>> {
+    source: Fuse<T>,
+    sink: K,
+    buffered: Option<T::Item>,
 }
 
 impl<M> Pool<M> {
@@ -41,13 +50,11 @@ impl<M> Pool<M> {
               M: 'static, // TODO(tailhook) should this bound be on type?
     {
         let (tx, rx) = channel(buffer_size);
-        let fut = rx.map_err(|_| -> E {
-            // channel receive never fails
-            unreachable!();
-        }).forward(multiplexer).map_err(|e| {
-            error!("Connection pool crashed with error: {}", e);
-        }).map(|(_sink, _stream)| ());
-        handle.spawn(fut);
+        handle.spawn(Forwarder {
+            source: rx.fuse(),
+            sink: multiplexer,
+            buffered: None,
+        });
         return Pool {
             channel: tx
         };
@@ -84,5 +91,63 @@ impl<M> Clone for Pool<M> {
         Pool {
             channel: self.channel.clone(),
         }
+    }
+}
+
+impl<T: Stream<Error=()>, K: Sink<SinkItem=T::Item>> Future for Forwarder<T, K>
+    where K::SinkError: fmt::Display,
+{
+    type Item = ();
+    type Error = ();
+    fn poll(&mut self) -> Result<Async<()>, ()> {
+        // If we've got an item buffered already, we need to write it to the
+        // sink before we can do anything else
+        if let Some(item) = self.buffered.take() {
+            let res = self.sink.start_send(item)
+                .map_err(|e| error!("Pool output error: {}. \
+                                     Stopping pool.", e))?;
+            match res {
+                AsyncSink::NotReady(item) => {
+                    self.buffered = Some(item);
+                    return Ok(Async::NotReady);
+                }
+                AsyncSink::Ready => {}
+            }
+        }
+
+        loop {
+            let res = self.source.poll()
+                .map_err(|()| error!("Pool input aborted. Stopping."))?;
+            match res {
+                Async::Ready(Some(item)) => {
+                    let res = self.sink.start_send(item)
+                        .map_err(|e| error!("Pool output error: {}. \
+                                             Stopping pool.", e))?;
+                    match res {
+                        AsyncSink::NotReady(item) => {
+                            self.buffered = Some(item);
+                            break;
+                        }
+                        AsyncSink::Ready => {}
+                    }
+                }
+                Async::Ready(None) => {
+                    let res = self.sink.poll_complete()
+                        .map_err(|e| error!("Pool output error: {}. \
+                            Stopping pool.", e))?;
+                    match res {
+                        Async::Ready(()) => return Ok(Async::Ready(())),
+                        Async::NotReady => return Ok(Async::NotReady),
+                    }
+                }
+                Async::NotReady => {
+                    self.sink.poll_complete()
+                        .map_err(|e| error!("Pool output error: {}. \
+                            Stopping pool.", e))?;
+                    break;
+                }
+            }
+        }
+        Ok(Async::NotReady)
     }
 }
