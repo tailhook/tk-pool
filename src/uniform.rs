@@ -25,8 +25,8 @@ use {Connect};
 /// Note the pool has neither a buffer of it's own nor any internal tasks, so
 /// you are expected to use `Sink::buffer` and call `poll_complete` on every
 /// wake-up.
-pub struct UniformMx<S, E, A=abstract_ns::Error> {
-    address: Box<Stream<Item=Address, Error=A>>,
+pub struct UniformMx<S, E, A> {
+    address: A,
     connect: Box<Connect<Sink=S, Error=E>>,
     cur_address: Option<Address>,
     active: VecDeque<(SocketAddr, S)>,
@@ -110,14 +110,15 @@ impl Config {
 
 impl<S, E, A> UniformMx<S, E, A>
     where S: Sink<SinkError=E>,
-          E: From<A> + fmt::Display
+          A: Stream<Item=Address>,
+          E: From<A::Error> + fmt::Display,
 {
     /// Create a connection pool
     ///
     /// This doesn't establish any connections even in eager mode. You need
     /// to call `poll_complete` to start.
     pub fn new<C>(handle: &Handle, config: &Arc<Config>,
-           address: Box<Stream<Item=Address, Error=A>>, connect: C)
+           address: A, connect: C)
         -> UniformMx<S, E, A>
         where C: Connect<Sink=S, Error=E> + 'static
     {
@@ -290,7 +291,8 @@ impl<S, E, A> UniformMx<S, E, A>
 
 impl<S, E, A> Sink for UniformMx<S, E, A>
     where S: Sink<SinkError=E>,
-          E: From<A> + fmt::Display,
+          A: Stream<Item=Address>,
+          E: From<A::Error> + fmt::Display,
 {
     type SinkItem = S::SinkItem;
     type SinkError = S::SinkError;
