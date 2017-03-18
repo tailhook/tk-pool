@@ -1,5 +1,5 @@
 extern crate tk_pool;
-extern crate minihttp;
+extern crate tk_http;
 extern crate futures;
 extern crate abstract_ns;
 extern crate futures_cpupool;
@@ -15,7 +15,7 @@ use futures::{Future, Stream};
 use futures::future::join_all;
 use tk_pool::uniform::{UniformMx, Config as PConfig};
 use tk_pool::Pool;
-use minihttp::client::{Proto, Config as HConfig, Client, Error};
+use tk_http::client::{Proto, Config as HConfig, Client, Error};
 
 use sink_map_err::SinkExt;
 
