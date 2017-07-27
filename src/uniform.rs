@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::collections::VecDeque;
 
 use rand::{thread_rng, Rng};
-use abstract_ns::{self, Address};
+use abstract_ns::{Address};
 use tokio_core::reactor::Handle;
 use futures::{StartSend, AsyncSink, Async, Future, Poll};
 use futures::sink::{Sink};

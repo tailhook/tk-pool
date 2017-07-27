@@ -6,7 +6,7 @@ extern crate futures_cpupool;
 extern crate tokio_core;
 extern crate env_logger;
 extern crate ns_std_threaded;
-#[macro_use] extern crate log;
+extern crate log;
 
 use std::env;
 
