@@ -15,7 +15,7 @@ authors = ["paul@colomiets.name"]
 futures = "0.1.10"
 abstract-ns = "0.3.0"
 tokio-core = "0.1.1"
-quick-error = "1.1.0"
+quick-error = "1.2.0"
 log = "0.3.6"
 rand = "0.3.15"
 
@@ -24,7 +24,7 @@ argparse = "0.2.1"
 env_logger = "0.3.5"
 ns-std-threaded = "0.2.0"
 futures-cpupool = "0.1.2"
-tk-http = "0.1.2"
+tk-http = "0.3.0"
 
 
 [lib]
