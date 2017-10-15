@@ -10,13 +10,11 @@ extern crate ns_router;
 
 use std::env;
 
-use futures::{Future};
+use futures::{Future, Sink};
 use futures::future::join_all;
 use tk_pool::uniform::{UniformMx, Config as PConfig};
 use tk_pool::Pool;
 use tk_http::client::{Proto, Config as HConfig, Client, Error};
-
-use sink_map_err::SinkExt;
 
 fn main() {
     if let Err(_) = env::var("RUST_LOG") {
@@ -60,51 +58,4 @@ fn main() {
             })
         }))
     })).unwrap();
-}
-
-// till next release of `futures`
-mod sink_map_err {
-
-    use futures::{Poll, StartSend};
-    use futures::sink::Sink;
-
-    pub trait SinkExt: Sink {
-        /// Transforms the error returned by the sink.
-        fn sink_map_err<F, E>(self, f: F) -> SinkMapErr<Self, F>
-            where F: FnOnce(Self::SinkError) -> E,
-                  Self: Sized,
-        {
-            new(self, f)
-        }
-    }
-
-    impl<T: Sink> SinkExt for T {}
-
-    /// Sink for the `Sink::sink_map_err` combinator.
-    #[derive(Debug)]
-    #[must_use = "sinks do nothing unless polled"]
-    pub struct SinkMapErr<S, F> {
-        sink: S,
-        f: Option<F>,
-    }
-
-    pub fn new<S, F>(s: S, f: F) -> SinkMapErr<S, F> {
-        SinkMapErr { sink: s, f: Some(f) }
-    }
-
-    impl<S, F, E> Sink for SinkMapErr<S, F>
-        where S: Sink,
-              F: FnOnce(S::SinkError) -> E,
-    {
-        type SinkItem = S::SinkItem;
-        type SinkError = E;
-
-        fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-            self.sink.start_send(item).map_err(|e| self.f.take().expect("cannot use MapErr after an error")(e))
-        }
-
-        fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-            self.sink.poll_complete().map_err(|e| self.f.take().expect("cannot use MapErr after an error")(e))
-        }
-    }
 }
