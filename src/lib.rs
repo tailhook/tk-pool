@@ -58,10 +58,11 @@
 //!
 #[warn(missing_docs)]
 #[macro_use] extern crate log;
+extern crate abstract_ns;
 extern crate futures;
 extern crate rand;
-extern crate abstract_ns;
 extern crate tokio_core;
+extern crate void;
 
 mod connect;
 mod pool;

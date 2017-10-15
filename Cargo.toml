@@ -13,16 +13,18 @@ authors = ["paul@colomiets.name"]
 
 [dependencies]
 futures = "0.1.10"
-abstract-ns = "0.3.0"
+abstract-ns = { git="https://github.com/tailhook/abstract-ns", rev="d1a7147" }
 tokio-core = "0.1.1"
 quick-error = "1.1.0"
 log = "0.3.6"
 rand = "0.3.15"
+void = "1.0.2"
 
 [dev-dependencies]
 argparse = "0.2.1"
 env_logger = "0.3.5"
-ns-std-threaded = "0.2.0"
+ns-std-threaded = { git="https://github.com/tailhook/abstract-ns", rev="d1a7147" }
+ns-router = { git="https://github.com/tailhook/ns-router", rev="7631350" }
 futures-cpupool = "0.1.2"
 tk-http = "0.1.2"
 

@@ -7,11 +7,12 @@ use std::sync::Arc;
 use std::collections::VecDeque;
 
 use rand::{thread_rng, Rng};
-use abstract_ns::{self, Address};
+use abstract_ns::{Address};
 use tokio_core::reactor::Handle;
 use futures::{StartSend, AsyncSink, Async, Future, Poll};
 use futures::sink::{Sink};
 use futures::stream::Stream;
+use void::{Void, unreachable};
 
 use {Connect};
 
@@ -25,16 +26,17 @@ use {Connect};
 /// Note the pool has neither a buffer of it's own nor any internal tasks, so
 /// you are expected to use `Sink::buffer` and call `poll_complete` on every
 /// wake-up.
-pub struct UniformMx<S, E, A> {
+pub struct UniformMx<S: Sink, A> {
     address: A,
-    connect: Box<Connect<Sink=S, Error=E>>,
+    connect: Box<Connect<Sink=S, Error=S::SinkError>>,
     cur_address: Option<Address>,
     active: VecDeque<(SocketAddr, S)>,
-    pending: VecDeque<(SocketAddr, Box<Future<Item=S, Error=E>>)>,
+    pending: VecDeque<(SocketAddr, Box<Future<Item=S, Error=S::SinkError>>)>,
     candidates: Vec<SocketAddr>,
     retired: VecDeque<S>,
     config: Arc<Config>,
     handle: Handle,
+    stopping: bool,
 }
 
 
@@ -108,10 +110,10 @@ impl Config {
     }
 }
 
-impl<S, E, A> UniformMx<S, E, A>
-    where S: Sink<SinkError=E>,
-          A: Stream<Item=Address>,
-          E: From<A::Error> + fmt::Display,
+impl<S, A> UniformMx<S, A>
+    where S: Sink,
+          A: Stream<Item=Address, Error=Void>,
+          S::SinkError: fmt::Display,
 {
     /// Create a connection pool
     ///
@@ -119,8 +121,8 @@ impl<S, E, A> UniformMx<S, E, A>
     /// to call `poll_complete` to start.
     pub fn new<C>(handle: &Handle, config: &Arc<Config>,
            address: A, connect: C)
-        -> UniformMx<S, E, A>
-        where C: Connect<Sink=S, Error=E> + 'static
+        -> UniformMx<S, A>
+        where C: Connect<Sink=S, Error=S::SinkError> + 'static
     {
         UniformMx {
             address: address,
@@ -132,11 +134,12 @@ impl<S, E, A> UniformMx<S, E, A>
             cur_address: None,
             candidates: Vec::new(),
             retired: VecDeque::new(),
+            stopping: false,
         }
     }
 
     fn try_send(&mut self, mut item: S::SinkItem)
-        -> Result<AsyncSink<S::SinkItem>, E>
+        -> Result<AsyncSink<S::SinkItem>, S::SinkError>
     {
         for _ in 0..self.active.len() {
             let (a, mut c) = self.active.pop_front().unwrap();
@@ -154,7 +157,7 @@ impl<S, E, A> UniformMx<S, E, A>
         Ok(AsyncSink::NotReady(item))
     }
     /// Returns `true` if new connection became active
-    fn do_poll(&mut self) -> Result<(), E> {
+    fn do_poll(&mut self) {
         match self.address.poll() {
             Ok(Async::Ready(Some(new_addr))) => {
                 if let Some(ref mut old_addr) = self.cur_address {
@@ -211,12 +214,11 @@ impl<S, E, A> UniformMx<S, E, A>
             },
             Ok(Async::NotReady) => {}
             Ok(Async::Ready(None)) => {
-                panic!("Address stream must be infinite");
+                info!("Poll is shutting down because address stream is ended");
+                self.stopping = true;
+                return
             }
-            Err(e) => {
-                // TODO(tailhook) poll crashes on address error?
-                return Err(e.into());
-            }
+            Err(e) => unreachable(e),
         }
         for _ in 0..self.retired.len() {
             let mut c = self.retired.pop_front().unwrap();
@@ -240,7 +242,6 @@ impl<S, E, A> UniformMx<S, E, A>
             }
         }
         self.poll_pending();
-        Ok(())
     }
 
     fn poll_pending(&mut self) -> bool {
@@ -289,17 +290,20 @@ impl<S, E, A> UniformMx<S, E, A>
 }
 
 
-impl<S, E, A> Sink for UniformMx<S, E, A>
-    where S: Sink<SinkError=E>,
-          A: Stream<Item=Address>,
-          E: From<A::Error> + fmt::Display,
+impl<S, A> Sink for UniformMx<S, A>
+    where S: Sink,
+          S::SinkError: fmt::Display,
+          A: Stream<Item=Address, Error=Void>,
 {
     type SinkItem = S::SinkItem;
     type SinkError = S::SinkError;
     fn start_send(&mut self, item: Self::SinkItem)
         -> StartSend<Self::SinkItem, Self::SinkError>
     {
-        self.do_poll()?;
+        self.do_poll();
+        if self.stopping {
+            return Ok(AsyncSink::NotReady(item));
+        }
         let item = match self.try_send(item)? {
             AsyncSink::NotReady(item) => item,
             AsyncSink::Ready => return Ok(AsyncSink::Ready),
@@ -309,10 +313,16 @@ impl<S, E, A> Sink for UniformMx<S, E, A>
     }
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError>
     {
+        if self.stopping {
+            return Ok(Async::Ready(()));
+        }
         if !self.config.lazy_connections {
             self.do_connect();
         }
-        self.do_poll()?;
+        self.do_poll();
+        if self.stopping {
+            return Ok(Async::Ready(()));
+        }
         // Basically we're never ready
         Ok(Async::NotReady)
     }

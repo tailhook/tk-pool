@@ -6,12 +6,11 @@ extern crate futures_cpupool;
 extern crate tokio_core;
 extern crate env_logger;
 extern crate ns_std_threaded;
-#[macro_use] extern crate log;
+extern crate ns_router;
 
 use std::env;
 
-use abstract_ns::Resolver;
-use futures::{Future, Stream};
+use futures::{Future};
 use futures::future::join_all;
 use tk_pool::uniform::{UniformMx, Config as PConfig};
 use tk_pool::Pool;
@@ -29,8 +28,10 @@ fn main() {
     let h1 = lp.handle();
     let h2 = lp.handle();
 
-    let ns = ns_std_threaded::ThreadedResolver::new(
-        futures_cpupool::CpuPool::new(1));
+    let ns = ns_router::Router::from_config(&ns_router::Config::new()
+        .set_fallthrough_host_resolver(ns_std_threaded::ThreadedResolver::new())
+        .done(),
+        &lp.handle());
     let pool_config = PConfig::new()
         .connections_per_address(2)
         .done();
@@ -39,7 +40,7 @@ fn main() {
         .done();
     let multiplexer = UniformMx::new(&h1,
         &pool_config,
-        ns.subscribe("httpbin.org:80").map_err(|e| Error::custom(e)),
+        ns.subscribe_many(&["httpbin.org:80"], 80),
         move |addr| Proto::connect_tcp(addr, &connection_config, &h2));
     let queue_size = 10;
     let mut pool = Pool::create(&lp.handle(), queue_size, multiplexer)
