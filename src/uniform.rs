@@ -139,24 +139,30 @@ impl<S, A> UniformMx<S, A>
     }
 
     fn try_send(&mut self, mut item: S::SinkItem)
-        -> Result<AsyncSink<S::SinkItem>, S::SinkError>
+        -> Result<AsyncSink<S::SinkItem>, ()>
     {
         for _ in 0..self.active.len() {
             let (a, mut c) = self.active.pop_front().unwrap();
-            item = match c.start_send(item)? {
-                AsyncSink::NotReady(item) => {
+            item = match c.start_send(item) {
+                Ok(AsyncSink::NotReady(item)) => {
                     self.active.push_back((a, c));
                     item
                 }
-                AsyncSink::Ready => {
+                Ok(AsyncSink::Ready) => {
                     self.active.push_back((a, c));
                     return Ok(AsyncSink::Ready);
+                }
+                Err(e) => {
+                    error!("Pool error: start_send to {} failed with {}. \
+                        Dropping connection.", a, e);
+                    // this is actually the end of the list
+                    self.candidates.insert(0, a);
+                    return Err(());
                 }
             };
         }
         Ok(AsyncSink::NotReady(item))
     }
-    /// Returns `true` if new connection became active
     fn do_poll(&mut self) {
         match self.address.poll() {
             Ok(Async::Ready(Some(new_addr))) => {
@@ -304,9 +310,20 @@ impl<S, A> Sink for UniformMx<S, A>
         if self.stopping {
             return Ok(AsyncSink::NotReady(item));
         }
-        let item = match self.try_send(item)? {
-            AsyncSink::NotReady(item) => item,
-            AsyncSink::Ready => return Ok(AsyncSink::Ready),
+        let item = match self.try_send(item) {
+            Ok(AsyncSink::NotReady(item)) => item,
+            Ok(AsyncSink::Ready) => return Ok(AsyncSink::Ready),
+            Err(()) => {
+                // This means there was an active connection and we tried
+                // to put an item there. In process of doing that we received
+                // an error, which means we lost the item.
+                //
+                // We can't return error here, because that would mean sink
+                // can't be used any more. So we behave, like we pushed the
+                // request successfully, but it was lost in transit (i.e.
+                // request was pushed, but connection closed afterwards).
+                return Ok(AsyncSink::Ready);
+            }
         };
         self.do_connect();
         Ok(AsyncSink::NotReady(item))

@@ -7,6 +7,7 @@ extern crate tokio_core;
 extern crate env_logger;
 extern crate ns_std_threaded;
 extern crate ns_router;
+extern crate log;
 
 use std::env;
 
