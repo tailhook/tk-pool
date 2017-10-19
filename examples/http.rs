@@ -10,12 +10,15 @@ extern crate ns_router;
 extern crate log;
 
 use std::env;
+use std::time::Duration;
 
+use abstract_ns::HostResolve;
 use futures::{Future, Sink};
 use futures::future::join_all;
 use tk_pool::uniform::{UniformMx, Config as PConfig};
 use tk_pool::Pool;
 use tk_http::client::{Proto, Config as HConfig, Client, Error};
+use ns_router::SubscribeExt;
 
 fn main() {
     if let Err(_) = env::var("RUST_LOG") {
@@ -28,7 +31,9 @@ fn main() {
     let h2 = lp.handle();
 
     let ns = ns_router::Router::from_config(&ns_router::Config::new()
-        .set_fallthrough_host_resolver(ns_std_threaded::ThreadedResolver::new())
+        .set_fallthrough(ns_std_threaded::ThreadedResolver::new()
+            .null_service_resolver()
+            .interval_subscriber(Duration::new(1, 0), &h1))
         .done(),
         &lp.handle());
     let pool_config = PConfig::new()
