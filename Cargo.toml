@@ -4,7 +4,7 @@ description = """
     Generic connection pool for tokio
 """
 license = "MIT/Apache-2.0"
-readme = "README.rst"
+readme = "README.md"
 keywords = ["tokio", "connection-pool", "TCP", "connection", "pool"]
 homepage = "http://github.com/tailhook/tk-pool"
 documentation = "http://docs.rs/tk-pool"
