@@ -7,74 +7,70 @@ use futures::future::Future;
 use futures::{StartSend, Poll, Async, AsyncSink};
 use tokio_core::reactor::Handle;
 
+use metrics::Collect;
+use config::{NewQueue, Queue, DefaultQueue};
 
-/// Pool is an object that is convenient to use for client connections. It
-/// will spawn a future that processes requests and establish a channel to it.
-/// It can be used from multiple threads (but will establish connections in
-/// an the one that originally created pool).
+
+/// Pool is an object you use to access a connection pool
 ///
-/// It's still a `Sink` and you are free to implement `Service` or whatever
-/// high level interfaces apply for your protocol.
-pub struct Pool<M> {
-    channel: Sender<M>,
+/// Usually the whole logic of connection pool is spawned in another future.
+/// This object encapsulates a channel that is used to communicate with pool.
+/// This object also contains a clone of metrics collection object as it's
+/// very important to collect metrics at this side of a channel.
+#[derive(Debug)]
+pub struct Pool<V, M> {
+    channel: Sender<V>,
+    metrics: M,
 }
 
-// This is similar to `futures::stream::Forward` but also calls poll_complete
-// on wakeups. This is important to keep connection pool up to date when
-// no new requests are coming in.
-struct Forwarder<T: Stream, K: Sink<SinkItem=T::Item>> {
-    source: Fuse<T>,
-    sink: K,
-    buffered: Option<T::Item>,
-}
-
-impl<M> Pool<M> {
-
-    //! Create a connection pool the specified buffer size and specified Sink
-    //! (which should be a Multiplexer)
-    //!
-    //! This is basicaly (sans the error conversion):
-    //!
-    //! ```rust,ignore
-    //! let (tx, rx) = channel(buffer_size);
-    //! handle.spawn(rx.forward(multiplexer));
-    //! return tx;
-    //! ```
-    //!
-    //!
-    // TODO(tailhook) should E be Error?
-    pub fn create<S, E>(handle: &Handle, buffer_size: usize, multiplexer: S)
-        -> Pool<M>
-        where E: fmt::Display,
-              S: Sink<SinkItem=M, SinkError=E> + 'static,
-              M: 'static, // TODO(tailhook) should this bound be on type?
-    {
-        let (tx, rx) = channel(buffer_size);
-        handle.spawn(Forwarder {
-            source: rx.fuse(),
-            sink: multiplexer,
-            buffered: None,
-        });
-        return Pool {
-            channel: tx
-        };
+impl<I, M> NewQueue<I, M> for DefaultQueue {
+    type Pool = Pool<I, M>;
+    fn construct(self, metrics: M) -> Pool<I, M> {
+        Queue(100).construct(metrics)
     }
-
 }
 
-impl<M> Sink for Pool<M> {
-    type SinkItem=M;
-    // TODO(tailhook) should we have some custom error for that?
-    type SinkError=SendError<M>;
+impl<I, M> NewQueue<I, M> for Queue {
+    type Pool = Pool<I, M>;
+    fn construct(self, metrics: M) -> Pool<I, M> {
+        let (tx, rx) = channel(self.0);
+        return Pool {
+            channel: tx,
+            metrics: metrics,
+        }
+    }
+}
+
+
+trait AssertTraits: Clone + Send + Sync {}
+impl<V: Send, M: Collect> AssertTraits for Pool<V, M> {}
+
+impl<V, M: Clone> Clone for Pool<V, M> {
+    fn clone(&self) -> Self {
+        Pool {
+            channel: self.channel.clone(),
+            metrics: self.metrics.clone(),
+        }
+    }
+}
+
+
+impl<V, M> Sink for Pool<V, M> {
+    type SinkItem=V;
+    // TODO(tailhook) make own error
+    type SinkError=SendError<V>;
 
     fn start_send(&mut self, item: Self::SinkItem)
         -> StartSend<Self::SinkItem, Self::SinkError>
     {
+        // TODO(tailhook) metrics
+        // TODO(tailhook) turn error into NotReady, and flag closed
         self.channel.start_send(item)
         // SendError contains actual object, but it also notifies us that
         // receiver is closed.
     }
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        // TODO(tailhook) turn closed flag into error
         self.channel.poll_complete()
         .map_err(|_| {
             // In fact poll_complete of the channel does nothing for now
@@ -86,12 +82,14 @@ impl<M> Sink for Pool<M> {
     }
 }
 
-impl<M> Clone for Pool<M> {
-    fn clone(&self) -> Self {
-        Pool {
-            channel: self.channel.clone(),
-        }
-    }
+/*
+// This is similar to `futures::stream::Forward` but also calls poll_complete
+// on wakeups. This is important to keep connection pool up to date when
+// no new requests are coming in.
+struct Forwarder<T: Stream, K: Sink<SinkItem=T::Item>> {
+    source: Fuse<T>,
+    sink: K,
+    buffered: Option<T::Item>,
 }
 
 impl<T: Stream<Error=()>, K: Sink<SinkItem=T::Item>> Future for Forwarder<T, K>
@@ -151,3 +149,4 @@ impl<T: Stream<Error=()>, K: Sink<SinkItem=T::Item>> Future for Forwarder<T, K>
         Ok(Async::NotReady)
     }
 }
+*/

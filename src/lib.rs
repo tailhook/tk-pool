@@ -14,10 +14,10 @@ extern crate tokio_core;
 extern crate void;
 
 mod connect;
-mod pool;
 mod basic;
+pub mod queue;
+pub mod metrics;
 pub mod config;
 
 pub use basic::pool_for;
 pub use connect::Connect;
-pub use pool::Pool;

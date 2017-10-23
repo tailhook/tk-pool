@@ -4,7 +4,19 @@ use tokio_core::reactor::Handle;
 use void::Void;
 
 use connect::Connect;
-use pool::Pool;
+use metrics::{self, Collect};
+
+/// A constructor for metrics collector object used for connection pool
+pub trait NewMetrics {
+    type Collect: Collect;
+    fn construct(self) -> Self::Collect;
+}
+
+/// A constructor for queue
+pub trait NewQueue<I, M> {
+    type Pool;
+    fn construct(self, metrics: M) -> Self::Pool;
+}
 
 /// A configuration builder that holds onto `Connect` object
 #[derive(Debug)]
@@ -29,7 +41,7 @@ pub struct DefaultMux;
 pub struct DefaultQueue;
 
 /// A constructor for a fixed-size dumb queue
-pub struct Queue(usize);
+pub struct Queue(pub(crate) usize);
 
 /// A constructor for a default error logger
 pub struct WarnLogger;
@@ -39,6 +51,13 @@ pub struct NoopMetrics;
 
 /// A constructor for a uniform connection pool with lazy connections
 pub struct LazyUniform(usize);
+
+impl NewMetrics for NoopMetrics {
+    type Collect = metrics::Noop;
+    fn construct(self) -> metrics::Noop {
+        metrics::Noop
+    }
+}
 
 impl<C> PartialConfig<C> {
     /// Create a configuration by adding an address stream
@@ -60,11 +79,20 @@ impl<C> PartialConfig<C> {
 impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
     /// Spawn a connection pool on the main loop specified by handle
     pub fn spawn_on(self, h: &Handle)
-        -> Pool<<<<C as Connect>::Future as Future>::Item as Sink>::SinkItem>
+        -> <Q as NewQueue<
+                <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
+                <M as NewMetrics>::Collect,
+           >>::Pool
         where C: Connect,
               <<C as Connect>::Future as Future>::Item: Sink,
+              M: NewMetrics,
+              Q: NewQueue<
+                <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
+                <M as NewMetrics>::Collect,
+              >,
     {
-        unimplemented!();
+        let m = self.metrics.construct();
+        self.queue.construct(m.clone())
     }
 
     /// Configure a uniform connection pool with specified number of
