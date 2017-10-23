@@ -15,8 +15,7 @@ use std::time::Duration;
 use abstract_ns::HostResolve;
 use futures::{Future, Sink};
 use futures::future::join_all;
-use tk_pool::uniform::{UniformMx, Config as PConfig};
-use tk_pool::Pool;
+use tk_pool::{pool_for};
 use tk_http::client::{Proto, Config as HConfig, Client, Error};
 use ns_router::SubscribeExt;
 
@@ -36,19 +35,28 @@ fn main() {
             .interval_subscriber(Duration::new(1, 0), &h1))
         .done(),
         &lp.handle());
-    let pool_config = PConfig::new()
-        .connections_per_address(2)
-        .done();
+
     let connection_config = HConfig::new()
         .inflight_request_limit(1)
         .done();
-    let multiplexer = UniformMx::new(&h1,
-        &pool_config,
-        ns.subscribe_many(&["httpbin.org:80"], 80),
-        move |addr| Proto::connect_tcp(addr, &connection_config, &h2));
-    let queue_size = 10;
-    let mut pool = Pool::create(&lp.handle(), queue_size, multiplexer)
-            .sink_map_err(|_| Error::custom("Can't send request"));
+    let mut pool =
+        pool_for(|addr| Proto::connect_tcp(addr, &connection_config, &h2))
+        .connect_to(ns.subscribe_many(&["httpbin.org:80"], 80))
+        .lazy_uniform_connections(2)
+        .with_queue_size(10)
+        .spawn_on(&lp.handle())
+        // This is needed for Client trait, (i.e. so that `.fetch_url()` works)
+        // May be fixed in tk-http in future
+        .sink_map_err(|_| Error::custom("Can't send request"));
+
+    // Alternative config (not implemented)
+    // let mut pool =
+    //     pool_for(|addr| Proto::connect_tcp(addr, &connection_config, &h2))
+    //     .with_config_stream(ns, once_and_wait(Config::new()
+    //         .set_name(&["httpbin.org:80"])
+    //         .lazy_uniform_connections(2)
+    //         .with_queue_size(10)))
+    //     .spawn_on(&lp.handle());
 
     println!("We will send 10 requests over 2 connections (per ip). \
               Each requests hangs for 5 seconds at the server side \
