@@ -7,22 +7,18 @@ use futures::{Future};
 ///
 /// Usually just passing a closure is good enough
 pub trait Connect {
-    type Sink;
-    type Error;
+    /// A future retuned by `connect` method
+    type Future: Future;
     /// Establish a connection to the specified address
-    fn connect(&mut self, address: SocketAddr)
-        -> Box<Future<Item=Self::Sink, Error=Self::Error>>;
+    fn connect(&mut self, address: SocketAddr) -> Self::Future;
 }
 
-impl<S, E, T> Connect for T
-    where T: FnMut(SocketAddr) -> Box<Future<Item=S, Error=E>>
+impl<T, F> Connect for T
+    where T: FnMut(SocketAddr) -> F,
+          F: Future,
 {
-    type Sink = S;
-    type Error = E;
-
-    fn connect(&mut self, address: SocketAddr)
-        -> Box<Future<Item=S, Error=E>>
-    {
+    type Future = T::Output;
+    fn connect(&mut self, address: SocketAddr) -> T::Output {
         (self)(address)
     }
 }
