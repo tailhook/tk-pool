@@ -17,6 +17,7 @@ mod connect;
 mod basic;
 pub mod queue;
 pub mod metrics;
+pub mod uniform;
 pub mod config;
 
 pub use basic::pool_for;

@@ -1,11 +1,12 @@
 use std::fmt;
 
-use futures::sync::mpsc::{channel, Sender, SendError};
+use futures::sync::mpsc::{self, channel, Sender, SendError};
 use futures::sink::Sink;
 use futures::stream::{Stream, Fuse};
 use futures::future::Future;
 use futures::{StartSend, Poll, Async, AsyncSink};
 use tokio_core::reactor::Handle;
+use void::Void;
 
 use metrics::Collect;
 use config::{NewQueue, Queue, DefaultQueue};
@@ -23,21 +24,43 @@ pub struct Pool<V, M> {
     metrics: M,
 }
 
+
+/// Wraps mpsc receiver but has a Void error (as real receiver too)
+#[derive(Debug)]
+pub struct Receiver<T> {
+     channel: mpsc::Receiver<T>,
+}
+
+impl<T> Stream for Receiver<T> {
+    type Item = T;
+    type Error = Void;
+    fn poll(&mut self) -> Result<Async<Option<T>>, Void> {
+        self.channel.poll().map_err(|()| unreachable!())
+    }
+}
+
 impl<I, M> NewQueue<I, M> for DefaultQueue {
     type Pool = Pool<I, M>;
-    fn construct(self, metrics: M) -> Pool<I, M> {
+    type Stream = Receiver<I>;
+    fn construct(self, metrics: M) -> (Self::Pool, Self::Stream) {
         Queue(100).construct(metrics)
     }
 }
 
 impl<I, M> NewQueue<I, M> for Queue {
     type Pool = Pool<I, M>;
-    fn construct(self, metrics: M) -> Pool<I, M> {
+    type Stream = Receiver<I>;
+    fn construct(self, metrics: M) -> (Self::Pool, Self::Stream) {
         let (tx, rx) = channel(self.0);
-        return Pool {
-            channel: tx,
-            metrics: metrics,
-        }
+        return (
+            Pool {
+                channel: tx,
+                metrics: metrics,
+            },
+            Receiver {
+                channel: rx,
+            }
+        );
     }
 }
 
