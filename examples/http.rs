@@ -40,7 +40,7 @@ fn main() {
         .inflight_request_limit(1)
         .done();
     let mut pool =
-        pool_for(|addr| Proto::connect_tcp(addr, &connection_config, &h2))
+        pool_for(move |addr| Proto::connect_tcp(addr, &connection_config, &h2))
         .connect_to(ns.subscribe_many(&["httpbin.org:80"], 80))
         .lazy_uniform_connections(2)
         .with_queue_size(10)

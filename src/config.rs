@@ -29,9 +29,11 @@ pub trait NewQueue<I, M> {
 pub trait NewMux {
     fn spawn_on<S, C, E, M>(self, h: &Handle, requests: S,
         connector: C, errors: E, metrics: M)
-        where C: Connect,
+        where C: Connect + 'static,
               E: ErrorLog<ConnectionError=<C::Future as Future>::Error>,
-              M: Collect;
+              E: 'static,
+              M: Collect + 'static,
+              S: Stream<Error=Void> + 'static;
 }
 
 pub trait NewErrorLog<C, S> {
@@ -45,6 +47,7 @@ pub trait ErrorLog {
     fn connection_error(self, addr: SocketAddr, e: Self::ConnectionError);
     fn sink_error(self, addr: SocketAddr, e: Self::SinkError);
 }
+
 
 /// A configuration builder that holds onto `Connect` object
 #[derive(Debug)]
@@ -132,18 +135,28 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
                 <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
                 <M as NewMetrics>::Collect,
            >>::Pool
-        where C: Connect,
+        where C: Connect + 'static,
               <<C as Connect>::Future as Future>::Item: Sink,
               M: NewMetrics,
+              M::Collect: 'static,
               X: NewMux,
               E: NewErrorLog<
                 <<C as Connect>::Future as Future>::Error,
                 <<<C as Connect>::Future as Future>::Item as Sink>::SinkError,
               >,
+              E::ErrorLog: 'static,
               Q: NewQueue<
                 <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
                 <M as NewMetrics>::Collect,
               >,
+              <Q as NewQueue<
+                <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
+                <M as NewMetrics>::Collect,
+              >>::Stream: Stream<
+                Item=<<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
+                Error=Void,
+              > + 'static
+
     {
         let m = self.metrics.construct();
         let e = self.errors.construct();
@@ -153,13 +166,13 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
     }
 
     /// Configure a uniform connection pool with specified number of
-    /// connections crated lazily (i.e. when there are requests)
+    /// per-host connections crated lazily (i.e. when there are requests)
     pub fn lazy_uniform_connections(self, num: usize)
         -> PoolConfig<C, A, LazyUniform, Q, E, M>
     {
         PoolConfig {
             mux: LazyUniform {
-                size: num,
+                conn_limit: num,
                 reconnect_timeout: Duration::from_millis(100),
             },
             address: self.address,
