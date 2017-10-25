@@ -1,6 +1,7 @@
 use std::fmt;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use abstract_ns::Address;
 use futures::{Future, Stream, Sink};
@@ -157,7 +158,10 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
         -> PoolConfig<C, A, LazyUniform, Q, E, M>
     {
         PoolConfig {
-            mux: LazyUniform(num),
+            mux: LazyUniform {
+                size: num,
+                reconnect_timeout: Duration::from_millis(100),
+            },
             address: self.address,
             connector: self.connector,
             errors: self.errors,
