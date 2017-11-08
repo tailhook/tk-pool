@@ -8,6 +8,7 @@ use futures::{Future, Stream, Sink};
 use tokio_core::reactor::Handle;
 use void::Void;
 
+use error_log::WarnLogger;
 use connect::Connect;
 use metrics::{self, Collect};
 use uniform::LazyUniform;
@@ -21,8 +22,10 @@ pub trait NewMetrics {
 /// A constructor for queue
 pub trait NewQueue<I, M> {
     type Pool;
-    fn spawn_on<S>(self, pool: S, metrics: M, handle: &Handle) -> Self::Pool
-        where S: Sink<SinkItem=I, SinkError=Void>;
+    fn spawn_on<S, E>(self, pool: S, e: E, metrics: M, handle: &Handle)
+        -> Self::Pool
+        where S: Sink<SinkItem=I, SinkError=Void> + 'static,
+              E: ErrorLog + 'static;
 }
 
 /// A constructor for multiplexer
@@ -53,8 +56,9 @@ pub trait NewErrorLog<C, S> {
 pub trait ErrorLog {
     type ConnectionError;
     type SinkError;
-    fn connection_error(self, addr: SocketAddr, e: Self::ConnectionError);
-    fn sink_error(self, addr: SocketAddr, e: Self::SinkError);
+    fn connection_error(&self, addr: SocketAddr, e: Self::ConnectionError);
+    fn sink_error(&self, addr: SocketAddr, e: Self::SinkError);
+    fn connection_pool_shut_down(&self);
 }
 
 
@@ -83,12 +87,6 @@ pub struct DefaultQueue;
 /// A constructor for a fixed-size dumb queue
 pub struct Queue(pub(crate) usize);
 
-/// A constructor for a default error logger
-pub struct WarnLogger;
-
-/// An instance of default error logger
-pub struct WarnLoggerInstance<C, S>(PhantomData<* const (C, S)>);
-
 /// A constructor for a default (no-op) metrics collector
 pub struct NoopMetrics;
 
@@ -96,27 +94,6 @@ impl NewMetrics for NoopMetrics {
     type Collect = metrics::Noop;
     fn construct(self) -> metrics::Noop {
         metrics::Noop
-    }
-}
-
-impl<C: fmt::Display, S: fmt::Display> NewErrorLog<C, S> for WarnLogger {
-    type ErrorLog = WarnLoggerInstance<C, S>;
-    fn construct(self) -> Self::ErrorLog {
-        WarnLoggerInstance(PhantomData)
-    }
-}
-
-impl<C, S> ErrorLog for WarnLoggerInstance<C, S>
-    where C: fmt::Display,
-          S: fmt::Display,
-{
-    type ConnectionError = C;
-    type SinkError = S;
-    fn connection_error(self, addr: SocketAddr, e: Self::ConnectionError) {
-        warn!("Connecting to {} failed: {}", addr, e);
-    }
-    fn sink_error(self, addr: SocketAddr, e: Self::SinkError) {
-        warn!("Connection to {} errored: {}", addr, e);
     }
 }
 
@@ -149,11 +126,12 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
               M: NewMetrics,
               M::Collect: 'static,
               X: NewMux<C, E::ErrorLog, M::Collect>,
+              <X as NewMux<C, E::ErrorLog, M::Collect>>::Sink: 'static,
               E: NewErrorLog<
                 <<C as Connect>::Future as Future>::Error,
                 <<<C as Connect>::Future as Future>::Item as Sink>::SinkError,
               >,
-              E::ErrorLog: 'static,
+              E::ErrorLog: Clone + 'static,
               Q: NewQueue<
                 <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
                 <M as NewMetrics>::Collect,
@@ -162,8 +140,8 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
     {
         let m = self.metrics.construct();
         let e = self.errors.construct();
-        let p = self.mux.construct(h, self.connector, e, m.clone());
-        self.queue.spawn_on(p, m, h)
+        let p = self.mux.construct(h, self.connector, e.clone(), m.clone());
+        self.queue.spawn_on(p, e, m, h)
     }
 
     /// Configure a uniform connection pool with specified number of

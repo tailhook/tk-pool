@@ -6,10 +6,10 @@ use futures::stream::{Stream, Fuse};
 use futures::future::Future;
 use futures::{StartSend, Poll, Async, AsyncSink};
 use tokio_core::reactor::Handle;
-use void::Void;
+use void::{Void, unreachable};
 
 use metrics::Collect;
-use config::{NewQueue, Queue, DefaultQueue};
+use config::{NewQueue, Queue, DefaultQueue, ErrorLog};
 
 
 /// Pool is an object you use to access a connection pool
@@ -39,33 +39,35 @@ impl<T> Stream for Receiver<T> {
     }
 }
 
-impl<I, M> NewQueue<I, M> for DefaultQueue {
+impl<I: 'static, M> NewQueue<I, M> for DefaultQueue {
     type Pool = Pool<I, M>;
-    fn spawn_on<S>(self, pool: S, metrics: M, handle: &Handle) -> Self::Pool
-        where S: Sink<SinkItem=I, SinkError=Void>,
+    fn spawn_on<S, E>(self, pool: S, err: E, metrics: M, handle: &Handle)
+        -> Self::Pool
+        where S: Sink<SinkItem=I, SinkError=Void> + 'static,
+              E: ErrorLog + 'static,
     {
-        Queue(100).spawn_on(pool, metrics, handle)
+        Queue(100).spawn_on(pool, err, metrics, handle)
     }
 }
 
-impl<I, M> NewQueue<I, M> for Queue {
+impl<I: 'static, M> NewQueue<I, M> for Queue {
     type Pool = Pool<I, M>;
-    fn spawn_on<S>(self, pool: S, metrics: M, handle: &Handle) -> Self::Pool
-        where S: Sink<SinkItem=I, SinkError=Void>,
+    fn spawn_on<S, E>(self, pool: S, e: E, metrics: M, handle: &Handle)
+        -> Self::Pool
+        where S: Sink<SinkItem=I, SinkError=Void> + 'static,
+              E: ErrorLog + 'static,
     {
-        unimplemented!();
-        /*
         let (tx, rx) = channel(self.0);
-        return (
-            Pool {
-                channel: tx,
-                metrics: metrics,
-            },
+        handle.spawn(
             Receiver {
                 channel: rx,
-            }
-        );
-        */
+            }.forward(pool)
+            .map(move |(_, _)| e.connection_pool_shut_down())
+            .map_err(|e| unreachable(e)));
+        return Pool {
+            channel: tx,
+            metrics: metrics,
+        };
     }
 }
 

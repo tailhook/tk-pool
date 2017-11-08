@@ -16,6 +16,7 @@ extern crate void;
 mod connect;
 mod basic;
 pub mod queue;
+pub mod error_log;
 pub mod metrics;
 pub mod uniform;
 pub mod config;
