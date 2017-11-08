@@ -41,16 +41,20 @@ impl<T> Stream for Receiver<T> {
 
 impl<I, M> NewQueue<I, M> for DefaultQueue {
     type Pool = Pool<I, M>;
-    type Stream = Receiver<I>;
-    fn construct(self, metrics: M) -> (Self::Pool, Self::Stream) {
-        Queue(100).construct(metrics)
+    fn spawn_on<S>(self, pool: S, metrics: M, handle: &Handle) -> Self::Pool
+        where S: Sink<SinkItem=I, SinkError=Void>,
+    {
+        Queue(100).spawn_on(pool, metrics, handle)
     }
 }
 
 impl<I, M> NewQueue<I, M> for Queue {
     type Pool = Pool<I, M>;
-    type Stream = Receiver<I>;
-    fn construct(self, metrics: M) -> (Self::Pool, Self::Stream) {
+    fn spawn_on<S>(self, pool: S, metrics: M, handle: &Handle) -> Self::Pool
+        where S: Sink<SinkItem=I, SinkError=Void>,
+    {
+        unimplemented!();
+        /*
         let (tx, rx) = channel(self.0);
         return (
             Pool {
@@ -61,6 +65,7 @@ impl<I, M> NewQueue<I, M> for Queue {
                 channel: rx,
             }
         );
+        */
     }
 }
 
@@ -104,72 +109,3 @@ impl<V, M> Sink for Pool<V, M> {
         })
     }
 }
-
-/*
-// This is similar to `futures::stream::Forward` but also calls poll_complete
-// on wakeups. This is important to keep connection pool up to date when
-// no new requests are coming in.
-struct Forwarder<T: Stream, K: Sink<SinkItem=T::Item>> {
-    source: Fuse<T>,
-    sink: K,
-    buffered: Option<T::Item>,
-}
-
-impl<T: Stream<Error=()>, K: Sink<SinkItem=T::Item>> Future for Forwarder<T, K>
-    where K::SinkError: fmt::Display,
-{
-    type Item = ();
-    type Error = ();
-    fn poll(&mut self) -> Result<Async<()>, ()> {
-        // If we've got an item buffered already, we need to write it to the
-        // sink before we can do anything else
-        if let Some(item) = self.buffered.take() {
-            let res = self.sink.start_send(item)
-                .map_err(|e| error!("Pool output error: {}. \
-                                     Stopping pool.", e))?;
-            match res {
-                AsyncSink::NotReady(item) => {
-                    self.buffered = Some(item);
-                    return Ok(Async::NotReady);
-                }
-                AsyncSink::Ready => {}
-            }
-        }
-
-        loop {
-            let res = self.source.poll()
-                .map_err(|()| error!("Pool input aborted. Stopping."))?;
-            match res {
-                Async::Ready(Some(item)) => {
-                    let res = self.sink.start_send(item)
-                        .map_err(|e| error!("Pool output error: {}. \
-                                             Stopping pool.", e))?;
-                    match res {
-                        AsyncSink::NotReady(item) => {
-                            self.buffered = Some(item);
-                            break;
-                        }
-                        AsyncSink::Ready => {}
-                    }
-                }
-                Async::Ready(None) => {
-                    let res = self.sink.poll_complete()
-                        .map_err(|e| error!("Pool output error: {}. \
-                            Stopping pool.", e))?;
-                    match res {
-                        Async::Ready(()) => return Ok(Async::Ready(())),
-                        Async::NotReady => return Ok(Async::NotReady),
-                    }
-                }
-                Async::NotReady => {
-                    self.sink.poll_complete()
-                        .map_err(|e| error!("Pool output error: {}. \
-                            Stopping pool.", e))?;
-                    break;
-                }
-            }
-        }
-        Ok(Async::NotReady)
-    }
-}
-*/

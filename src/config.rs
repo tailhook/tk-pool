@@ -21,19 +21,28 @@ pub trait NewMetrics {
 /// A constructor for queue
 pub trait NewQueue<I, M> {
     type Pool;
-    type Stream;
-    fn construct(self, metrics: M) -> (Self::Pool, Self::Stream);
+    fn spawn_on<S>(self, pool: S, metrics: M, handle: &Handle) -> Self::Pool
+        where S: Sink<SinkItem=I, SinkError=Void>;
 }
 
 /// A constructor for multiplexer
-pub trait NewMux {
-    fn spawn_on<S, C, E, M>(self, h: &Handle, requests: S,
-        connector: C, errors: E, metrics: M)
-        where C: Connect + 'static,
-              E: ErrorLog<ConnectionError=<C::Future as Future>::Error>,
-              E: 'static,
-              M: Collect + 'static,
-              S: Stream<Error=Void> + 'static;
+pub trait NewMux<C, E, M>
+    where C: Connect + 'static,
+          <<C as Connect>::Future as Future>::Item: Sink,
+          E: ErrorLog<
+            ConnectionError=<C::Future as Future>::Error,
+            SinkError=<<C::Future as Future>::Item as Sink>::SinkError,
+            >,
+          E: 'static,
+          M: Collect + 'static,
+{
+    type Sink: Sink<
+        SinkItem=<<C::Future as Future>::Item as Sink>::SinkItem,
+        SinkError=Void,
+    >;
+    fn construct(self,
+        h: &Handle, connector: C, errors: E, metrics: M)
+        -> Self::Sink;
 }
 
 pub trait NewErrorLog<C, S> {
@@ -139,7 +148,7 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
               <<C as Connect>::Future as Future>::Item: Sink,
               M: NewMetrics,
               M::Collect: 'static,
-              X: NewMux,
+              X: NewMux<C, E::ErrorLog, M::Collect>,
               E: NewErrorLog<
                 <<C as Connect>::Future as Future>::Error,
                 <<<C as Connect>::Future as Future>::Item as Sink>::SinkError,
@@ -149,20 +158,12 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
                 <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
                 <M as NewMetrics>::Collect,
               >,
-              <Q as NewQueue<
-                <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
-                <M as NewMetrics>::Collect,
-              >>::Stream: Stream<
-                Item=<<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
-                Error=Void,
-              > + 'static
 
     {
         let m = self.metrics.construct();
         let e = self.errors.construct();
-        let (tx, rx) = self.queue.construct(m.clone());
-        self.mux.spawn_on(h, rx, self.connector, e, m);
-        return tx;
+        let p = self.mux.construct(h, self.connector, e, m.clone());
+        self.queue.spawn_on(p, m, h)
     }
 
     /// Configure a uniform connection pool with specified number of

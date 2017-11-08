@@ -1,6 +1,7 @@
+use std::fmt;
 use std::time::Duration;
 
-use futures::{Future, Stream, Async};
+use futures::{Future, Stream, Async, Sink, AsyncSink};
 use tokio_core::reactor::Handle;
 
 use config::{ErrorLog, NewMux};
@@ -15,39 +16,43 @@ pub struct LazyUniform {
     pub(crate) reconnect_timeout: Duration,
 }
 
-struct Lazy<S, C, E, M> {
+pub struct Lazy<C, E, M> {
     conn_limit: usize,
     reconnect_ms: (u64, u64),  // easier to make random value
     shutdown: bool,
-    requests: S,
     connector: C,
     errors: E,
     metrics: M,
 }
 
-impl NewMux for LazyUniform {
-    fn spawn_on<S, C, E, M>(self, h: &Handle, requests: S,
-        connector: C, errors: E, metrics: M)
-        where C: Connect + 'static,
-              E: ErrorLog<ConnectionError=<C::Future as Future>::Error>,
-              E: 'static,
-              M: Collect + 'static,
-              S: Stream<Error=Void> + 'static,
+impl<C, E, M> NewMux<C, E, M> for LazyUniform
+    where C: Connect + 'static,
+          <<C as Connect>::Future as Future>::Item: Sink,
+          E: ErrorLog<
+            ConnectionError=<C::Future as Future>::Error,
+            SinkError=<<C::Future as Future>::Item as Sink>::SinkError,
+            >,
+          E: 'static,
+          M: Collect + 'static,
+{
+    type Sink = Lazy<C, E, M>;
+    fn construct(self,
+        h: &Handle, connector: C, errors: E, metrics: M)
+        -> Lazy<C, E, M>
     {
         let reconn_ms = self.reconnect_timeout.as_secs() * 1000 +
             (self.reconnect_timeout.subsec_nanos() / 1000_000) as u64;
-        h.spawn(Lazy {
+        Lazy {
             conn_limit: self.conn_limit,
             reconnect_ms: (reconn_ms / 2, reconn_ms * 3 / 2),
             shutdown: false,
-            requests, connector, errors, metrics,
-        });
+            connector, errors, metrics,
+        }
     }
 }
 
-impl<S, C, E, M> Lazy<S, C, E, M>
+impl<C, E, M> Lazy<C, E, M>
     where C: Connect,
-          S: Stream<Error=Void>,
           E: ErrorLog<ConnectionError=<C::Future as Future>::Error>,
           M: Collect,
 {
@@ -60,15 +65,21 @@ impl<S, C, E, M> Lazy<S, C, E, M>
     }
 }
 
-impl<S, C, E, M> Future for Lazy<S, C, E, M>
+impl<C, E, M> Sink for Lazy<C, E, M>
     where C: Connect,
-          S: Stream<Error=Void>,
-          E: ErrorLog<ConnectionError=<C::Future as Future>::Error>,
+          <C::Future as Future>::Item: Sink,
+          E: ErrorLog<
+            ConnectionError=<C::Future as Future>::Error,
+            SinkError=<<C::Future as Future>::Item as Sink>::SinkError>,
           M: Collect,
 {
-    type Item = ();
-    type Error = ();
-    fn poll(&mut self) -> Result<Async<()>, ()> {
+    type SinkItem = <<C::Future as Future>::Item as Sink>::SinkItem;
+    type SinkError = Void;
+    fn start_send(&mut self, v: Self::SinkItem)
+        -> Result<AsyncSink<Self::SinkItem>, Void>
+    {
+        unimplemented!()
+        /*
         if self.shutdown {
             return Ok(self.shutdown());
         }
@@ -88,5 +99,9 @@ impl<S, C, E, M> Future for Lazy<S, C, E, M>
             }
         }
         return Ok(Async::NotReady);
+        */
+    }
+    fn poll_complete(&mut self) -> Result<Async<()>, Void> {
+        unimplemented!()
     }
 }
