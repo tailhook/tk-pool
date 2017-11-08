@@ -19,7 +19,6 @@ pub struct LazyUniform {
 pub struct Lazy<C, E, M> {
     conn_limit: usize,
     reconnect_ms: (u64, u64),  // easier to make random value
-    shutdown: bool,
     connector: C,
     errors: E,
     metrics: M,
@@ -45,7 +44,6 @@ impl<C, E, M> NewMux<C, E, M> for LazyUniform
         Lazy {
             conn_limit: self.conn_limit,
             reconnect_ms: (reconn_ms / 2, reconn_ms * 3 / 2),
-            shutdown: false,
             connector, errors, metrics,
         }
     }
@@ -56,9 +54,6 @@ impl<C, E, M> Lazy<C, E, M>
           E: ErrorLog<ConnectionError=<C::Future as Future>::Error>,
           M: Collect,
 {
-    fn shutdown(&mut self) -> Async<()> {
-        unimplemented!();
-    }
 
     fn process_requests(&mut self) {
         unimplemented!();
@@ -80,9 +75,6 @@ impl<C, E, M> Sink for Lazy<C, E, M>
     {
         unimplemented!()
         /*
-        if self.shutdown {
-            return Ok(self.shutdown());
-        }
         loop {
             self.process_requests();
             // TODO(tailhook) if has capacity
@@ -103,5 +95,8 @@ impl<C, E, M> Sink for Lazy<C, E, M>
     }
     fn poll_complete(&mut self) -> Result<Async<()>, Void> {
         unimplemented!()
+    }
+    fn close(&mut self) -> Result<Async<()>, Void> {
+        unimplemented!();
     }
 }
