@@ -1,10 +1,8 @@
-use std::fmt;
-
 use futures::sync::mpsc::{self, channel, Sender, SendError};
 use futures::sink::Sink;
-use futures::stream::{Stream, Fuse};
+use futures::stream::{Stream};
 use futures::future::Future;
-use futures::{StartSend, Poll, Async, AsyncSink};
+use futures::{StartSend, Poll, Async};
 use tokio_core::reactor::Handle;
 use void::{Void, unreachable};
 

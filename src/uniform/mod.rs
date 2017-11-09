@@ -1,13 +1,15 @@
-use std::fmt;
+mod failures;
+
 use std::time::Duration;
 
-use futures::{Future, Stream, Async, Sink, AsyncSink};
+use futures::{Future, Async, Sink, AsyncSink};
 use tokio_core::reactor::Handle;
 
 use config::{ErrorLog, NewMux};
 use connect::Connect;
 use metrics::Collect;
-use void::{Void, unreachable};
+use void::{Void};
+use uniform::failures::Blacklist;
 
 
 /// A constructor for a uniform connection pool with lazy connections
@@ -22,6 +24,7 @@ pub struct Lazy<C, E, M> {
     connector: C,
     errors: E,
     metrics: M,
+    blist: Blacklist,
 }
 
 impl<C, E, M> NewMux<C, E, M> for LazyUniform
@@ -44,6 +47,7 @@ impl<C, E, M> NewMux<C, E, M> for LazyUniform
         Lazy {
             conn_limit: self.conn_limit,
             reconnect_ms: (reconn_ms / 2, reconn_ms * 3 / 2),
+            blist: Blacklist::new(h),
             connector, errors, metrics,
         }
     }

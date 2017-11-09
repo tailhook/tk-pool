@@ -1,5 +1,3 @@
-use std::fmt;
-use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::time::Duration;
 
