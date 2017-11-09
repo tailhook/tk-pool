@@ -38,4 +38,5 @@ containers:
       path: /
 
     environ:
+      RUST_BACKTRACE: 1
       HOME: /work/target
