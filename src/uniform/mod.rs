@@ -1,4 +1,5 @@
 mod failures;
+mod aligner;
 
 use std::time::Duration;
 
@@ -9,21 +10,23 @@ use config::{ErrorLog, NewMux};
 use connect::Connect;
 use metrics::Collect;
 use void::{Void};
+use uniform::aligner::Aligner;
 use uniform::failures::Blacklist;
 
 
 /// A constructor for a uniform connection pool with lazy connections
 pub struct LazyUniform {
-    pub(crate) conn_limit: usize,
+    pub(crate) conn_limit: u32,
     pub(crate) reconnect_timeout: Duration,
 }
 
 pub struct Lazy<C, E, M> {
-    conn_limit: usize,
+    conn_limit: u32,
     reconnect_ms: (u64, u64),  // easier to make random value
     connector: C,
     errors: E,
     metrics: M,
+    aligner: Aligner,
     blist: Blacklist,
 }
 
@@ -48,6 +51,7 @@ impl<C, E, M> NewMux<C, E, M> for LazyUniform
             conn_limit: self.conn_limit,
             reconnect_ms: (reconn_ms / 2, reconn_ms * 3 / 2),
             blist: Blacklist::new(h),
+            aligner: Aligner::new(),
             connector, errors, metrics,
         }
     }

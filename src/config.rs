@@ -144,7 +144,7 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
 
     /// Configure a uniform connection pool with specified number of
     /// per-host connections crated lazily (i.e. when there are requests)
-    pub fn lazy_uniform_connections(self, num: usize)
+    pub fn lazy_uniform_connections(self, num: u32)
         -> PoolConfig<C, A, LazyUniform, Q, E, M>
     {
         PoolConfig {

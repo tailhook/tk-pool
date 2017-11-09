@@ -31,7 +31,7 @@ impl Ord for Pair {
 
 impl PartialEq for Pair {
     fn eq(&self, other: &Pair) -> bool {
-        self.eq(other)
+        self.0.eq(&other.0)
     }
 }
 
@@ -45,11 +45,11 @@ impl Blacklist {
         }
     }
     pub fn blacklist(&mut self, addr: SocketAddr, time: Instant) {
-        if self.addrs.contains_key(&addr) {
+        if self.addrs.contains(&addr) {
             // can't add again because is in heap
             return;
         }
-        self.heap.insert(Pair(time, addr));
+        self.heap.push(Pair(time, addr));
         self.addrs.insert(addr);
     }
     pub fn poll(&mut self) -> Async<SocketAddr> {
