@@ -27,8 +27,9 @@ pub trait NewQueue<I, M> {
 }
 
 /// A constructor for multiplexer
-pub trait NewMux<C, E, M>
-    where C: Connect + 'static,
+pub trait NewMux<A, C, E, M>
+    where A: Stream<Item=Address, Error=Void>,
+          C: Connect + 'static,
           <<C as Connect>::Future as Future>::Item: Sink,
           E: ErrorLog<
             ConnectionError=<C::Future as Future>::Error,
@@ -42,7 +43,7 @@ pub trait NewMux<C, E, M>
         SinkError=Void,
     >;
     fn construct(self,
-        h: &Handle, connector: C, errors: E, metrics: M)
+        h: &Handle, address: A, connector: C, errors: E, metrics: M)
         -> Self::Sink;
 }
 
@@ -119,12 +120,13 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
                 <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
                 <M as NewMetrics>::Collect,
            >>::Pool
-        where C: Connect + 'static,
+        where A: Stream<Item=Address, Error=Void>,
+              C: Connect + 'static,
               <<C as Connect>::Future as Future>::Item: Sink,
               M: NewMetrics,
               M::Collect: 'static,
-              X: NewMux<C, E::ErrorLog, M::Collect>,
-              <X as NewMux<C, E::ErrorLog, M::Collect>>::Sink: 'static,
+              X: NewMux<A, C, E::ErrorLog, M::Collect>,
+              <X as NewMux<A, C, E::ErrorLog, M::Collect>>::Sink: 'static,
               E: NewErrorLog<
                 <<C as Connect>::Future as Future>::Error,
                 <<<C as Connect>::Future as Future>::Item as Sink>::SinkError,
@@ -138,7 +140,8 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
     {
         let m = self.metrics.construct();
         let e = self.errors.construct();
-        let p = self.mux.construct(h, self.connector, e.clone(), m.clone());
+        let p = self.mux.construct(h,
+            self.address, self.connector, e.clone(), m.clone());
         self.queue.spawn_on(p, e, m, h)
     }
 

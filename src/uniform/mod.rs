@@ -3,13 +3,14 @@ mod aligner;
 
 use std::time::Duration;
 
-use futures::{Future, Async, Sink, AsyncSink};
+use abstract_ns::Address;
+use futures::{Future, Async, Sink, AsyncSink, Stream};
 use tokio_core::reactor::Handle;
 
 use config::{ErrorLog, NewMux};
 use connect::Connect;
 use metrics::Collect;
-use void::{Void};
+use void::{Void, unreachable};
 use uniform::aligner::Aligner;
 use uniform::failures::Blacklist;
 
@@ -20,18 +21,22 @@ pub struct LazyUniform {
     pub(crate) reconnect_timeout: Duration,
 }
 
-pub struct Lazy<C, E, M> {
+pub struct Lazy<A, C, E, M> {
     conn_limit: u32,
     reconnect_ms: (u64, u64),  // easier to make random value
+    address: A,
     connector: C,
     errors: E,
     metrics: M,
     aligner: Aligner,
     blist: Blacklist,
+    cur_address: Address,
+    shutdown: bool,
 }
 
-impl<C, E, M> NewMux<C, E, M> for LazyUniform
-    where C: Connect + 'static,
+impl<A, C, E, M> NewMux<A, C, E, M> for LazyUniform
+    where A: Stream<Item=Address, Error=Void>,
+          C: Connect + 'static,
           <<C as Connect>::Future as Future>::Item: Sink,
           E: ErrorLog<
             ConnectionError=<C::Future as Future>::Error,
@@ -40,10 +45,10 @@ impl<C, E, M> NewMux<C, E, M> for LazyUniform
           E: 'static,
           M: Collect + 'static,
 {
-    type Sink = Lazy<C, E, M>;
+    type Sink = Lazy<A, C, E, M>;
     fn construct(self,
-        h: &Handle, connector: C, errors: E, metrics: M)
-        -> Lazy<C, E, M>
+        h: &Handle, address: A, connector: C, errors: E, metrics: M)
+        -> Lazy<A, C, E, M>
     {
         let reconn_ms = self.reconnect_timeout.as_secs() * 1000 +
             (self.reconnect_timeout.subsec_nanos() / 1000_000) as u64;
@@ -52,13 +57,16 @@ impl<C, E, M> NewMux<C, E, M> for LazyUniform
             reconnect_ms: (reconn_ms / 2, reconn_ms * 3 / 2),
             blist: Blacklist::new(h),
             aligner: Aligner::new(),
-            connector, errors, metrics,
+            shutdown: false,
+            cur_address: [][..].into(),
+            address, connector, errors, metrics,
         }
     }
 }
 
-impl<C, E, M> Lazy<C, E, M>
-    where C: Connect,
+impl<A, C, E, M> Lazy<A, C, E, M>
+    where A: Stream<Item=Address, Error=Void>,
+          C: Connect,
           E: ErrorLog<ConnectionError=<C::Future as Future>::Error>,
           M: Collect,
 {
@@ -66,10 +74,48 @@ impl<C, E, M> Lazy<C, E, M>
     fn process_requests(&mut self) {
         unimplemented!();
     }
+    fn do_connect(&mut self) {
+        unimplemented!();
+    }
+    fn new_addr(&mut self) -> Option<Address> {
+        let mut result = None;
+        loop {
+            match self.address.poll() {
+                Ok(Async::Ready(Some(addr))) => result = Some(addr),
+                Ok(Async::Ready(None)) => {
+                    self.shutdown = true;
+                    result = None;
+                    break;
+                }
+                Ok(Async::NotReady) => break,
+                Err(e) => unreachable(e),
+            }
+        }
+        return result;
+    }
+    fn check_for_address_updates(&mut self) {
+        let new_addr = match self.new_addr() {
+            Some(new) => {
+                if new != self.cur_address {
+                    new
+                } else {
+                    return;
+                }
+            }
+            _ => return,
+        };
+        let (old, new) = self.cur_address.at(0)
+                       .compare_addresses(&new_addr.at(0));
+        debug!("New address, to be retired {:?}, \
+                to be connected {:?}", old, new);
+        self.aligner.update(new, old);
+        // TODO(tailhook) retire old connections
+    }
 }
 
-impl<C, E, M> Sink for Lazy<C, E, M>
-    where C: Connect,
+impl<A, C, E, M> Sink for Lazy<A, C, E, M>
+    where A: Stream<Item=Address, Error=Void>,
+          C: Connect,
           <C::Future as Future>::Item: Sink,
           E: ErrorLog<
             ConnectionError=<C::Future as Future>::Error,
@@ -81,6 +127,7 @@ impl<C, E, M> Sink for Lazy<C, E, M>
     fn start_send(&mut self, v: Self::SinkItem)
         -> Result<AsyncSink<Self::SinkItem>, Void>
     {
+        self.check_for_address_updates();
         unimplemented!()
         /*
         loop {
