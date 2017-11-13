@@ -52,6 +52,9 @@ impl Blacklist {
         self.heap.push(Pair(time, addr));
         self.addrs.insert(addr);
     }
+    pub fn is_failing(&self, addr: SocketAddr) -> bool {
+        return self.addrs.contains(&addr);
+    }
     pub fn poll(&mut self) -> Async<SocketAddr> {
         loop {
             match self.heap.peek() {

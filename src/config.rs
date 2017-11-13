@@ -10,6 +10,7 @@ use error_log::WarnLogger;
 use connect::Connect;
 use metrics::{self, Collect};
 use uniform::LazyUniform;
+use queue::Done;
 
 /// A constructor for metrics collector object used for connection pool
 pub trait NewMetrics {
@@ -22,7 +23,7 @@ pub trait NewQueue<I, M> {
     type Pool;
     fn spawn_on<S, E>(self, pool: S, e: E, metrics: M, handle: &Handle)
         -> Self::Pool
-        where S: Sink<SinkItem=I, SinkError=Void> + 'static,
+        where S: Sink<SinkItem=I, SinkError=Done> + 'static,
               E: ErrorLog + 'static;
 }
 
@@ -40,7 +41,7 @@ pub trait NewMux<A, C, E, M>
 {
     type Sink: Sink<
         SinkItem=<<C::Future as Future>::Item as Sink>::SinkItem,
-        SinkError=Void,
+        SinkError=Done,
     >;
     fn construct(self,
         h: &Handle, address: A, connector: C, errors: E, metrics: M)

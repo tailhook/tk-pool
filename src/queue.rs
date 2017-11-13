@@ -23,6 +23,9 @@ pub struct Pool<V, M> {
 }
 
 
+pub struct Done;
+
+
 /// Wraps mpsc receiver but has a Void error (as real receiver too)
 #[derive(Debug)]
 pub struct Receiver<T> {
@@ -41,7 +44,7 @@ impl<I: 'static, M> NewQueue<I, M> for DefaultQueue {
     type Pool = Pool<I, M>;
     fn spawn_on<S, E>(self, pool: S, err: E, metrics: M, handle: &Handle)
         -> Self::Pool
-        where S: Sink<SinkItem=I, SinkError=Void> + 'static,
+        where S: Sink<SinkItem=I, SinkError=Done> + 'static,
               E: ErrorLog + 'static,
     {
         Queue(100).spawn_on(pool, err, metrics, handle)
@@ -52,16 +55,16 @@ impl<I: 'static, M> NewQueue<I, M> for Queue {
     type Pool = Pool<I, M>;
     fn spawn_on<S, E>(self, pool: S, e: E, metrics: M, handle: &Handle)
         -> Self::Pool
-        where S: Sink<SinkItem=I, SinkError=Void> + 'static,
+        where S: Sink<SinkItem=I, SinkError=Done> + 'static,
               E: ErrorLog + 'static,
     {
         let (tx, rx) = channel(self.0);
         handle.spawn(
-            Receiver {
+            pool.send_all(Receiver {
                 channel: rx,
-            }.forward(pool)
+            }.map_err(|e| -> Done { unreachable(e) }))
             .map(move |(_, _)| e.connection_pool_shut_down())
-            .map_err(|e| unreachable(e)));
+            .map_err(|_: Done| ()));
         return Pool {
             channel: tx,
             metrics: metrics,
