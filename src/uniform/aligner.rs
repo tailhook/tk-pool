@@ -86,6 +86,22 @@ impl Aligner {
         }
         return None;
     }
+    pub fn put(&mut self, addr: SocketAddr) {
+        if let Some(num) = self.addrs.get_mut(&addr) {
+            assert!(*num > 0);
+            match self.items.entry(*num) {
+                Occupied(mut o) => {
+                    o.get_mut().remove(&addr);
+                    if o.get().len() == 0 {
+                        o.remove_entry();
+                    }
+                }
+                _ => {}
+            }
+            *num -= 1;
+            self.items.entry(*num).or_insert_with(HashSet::new).insert(addr);
+        }
+    }
 }
 
 #[cfg(test)]

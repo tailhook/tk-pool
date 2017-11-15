@@ -2,12 +2,13 @@ mod failures;
 mod aligner;
 mod connect;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::net::SocketAddr;
 
 use abstract_ns::Address;
 use futures::{Future, Async, Sink, AsyncSink, Stream};
 use futures::stream::FuturesUnordered;
+use rand::{thread_rng, Rng};
 use tokio_core::reactor::Handle;
 
 use config::{ErrorLog, NewMux};
@@ -21,9 +22,11 @@ use queue::Done;
 
 
 pub enum FutureOk {
+    Connected(Box<Future<Item=FutureOk, Error=FutureErr>>),
 }
 
 pub enum FutureErr {
+    Failed(SocketAddr),
 }
 
 /// A constructor for a uniform connection pool with lazy connections
@@ -161,24 +164,68 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
             return Ok(AsyncSink::NotReady(v));
         } else {
             self.check_for_address_updates();
-            loop {
-                if let Some(addr) = self.do_connect() {
-                    unimplemented!();
-                    // match self.futures.poll() {
-                    // }
-                    // if addr matches failure, do connect again
-                } else {
-                    return Ok(AsyncSink::NotReady(v));
+            while let Some(addr) = self.do_connect() {
+                match self.futures.poll() {
+                    Ok(Async::NotReady) => break,
+                    Ok(Async::Ready(Some(FutureOk::Connected(future)))) => {
+                        unimplemented!();
+                    }
+                    Err(FutureErr::Failed(sa)) => {
+                        let (min, max) = self.reconnect_ms;
+                        let dur = Duration::from_millis(
+                                thread_rng().gen_range(min, max));
+                        self.blist.blacklist(sa, Instant::now() + dur);
+                        self.aligner.put(sa);
+                        if sa == addr {
+                            // this address just failed,
+                            // let's try to find another
+                            continue;
+                        } else {
+                            // another address has failed let's wait this one
+                            // a bit
+                            break;
+                        }
+                    }
+                    // we just put another future and it did not exit
+                    // yet
+                    Ok(Async::Ready(None)) => unreachable!(),
                 }
             }
+            return Ok(AsyncSink::NotReady(v));
         }
     }
     fn poll_complete(&mut self) -> Result<Async<()>, Done> {
-        unimplemented!();
-        // match self.futures.poll() {
-        // }
+        if self.shutdown {
+            if self.poll_shutdown() {
+                return Err(Done);
+            }
+            return Ok(Async::NotReady);
+        } else {
+            loop {
+                match self.futures.poll() {
+                    Ok(Async::NotReady) => break,
+                    Ok(Async::Ready(None)) => break,
+                    Ok(Async::Ready(Some(FutureOk::Connected(future)))) => {
+                        unimplemented!();
+                    }
+                    Err(FutureErr::Failed(sa)) => {
+                        let (min, max) = self.reconnect_ms;
+                        let dur = Duration::from_millis(
+                                thread_rng().gen_range(min, max));
+                        self.blist.blacklist(sa, Instant::now() + dur);
+                        self.aligner.put(sa);
+                    }
+                }
+            }
+        }
+        // TODO(tailhook) check if there is a space
+        return Ok(Async::Ready(()));
     }
     fn close(&mut self) -> Result<Async<()>, Done> {
-        unimplemented!();
+        self.shutdown = true;
+        if self.poll_shutdown() {
+            return Ok(Async::Ready(()));
+        }
+        return Ok(Async::NotReady);
     }
 }
