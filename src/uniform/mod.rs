@@ -1,6 +1,7 @@
-mod failures;
 mod aligner;
+mod chan;
 mod connect;
+mod failures;
 mod sink;
 
 use std::time::{Duration, Instant};
@@ -11,15 +12,16 @@ use futures::{Future, Async, Sink, AsyncSink, Stream};
 use futures::stream::FuturesUnordered;
 use rand::{thread_rng, Rng};
 use tokio_core::reactor::Handle;
+use void::{Void, unreachable};
 
 use config::{ErrorLog, NewMux};
 use connect::Connect;
 use metrics::Collect;
-use void::{Void, unreachable};
-use uniform::aligner::Aligner;
-use uniform::failures::Blacklist;
-use uniform::connect::ConnectFuture;
 use queue::Done;
+use uniform::aligner::Aligner;
+use uniform::chan::{Action, Sender};
+use uniform::connect::ConnectFuture;
+use uniform::failures::Blacklist;
 use uniform::sink::SinkFuture;
 
 
@@ -99,10 +101,6 @@ impl<A, C, E, M> Lazy<A, C, E, M>
           >,
           M: Collect,
 {
-
-    fn process_requests(&mut self) {
-        unimplemented!();
-    }
     fn new_addr(&mut self) -> Option<Address> {
         let mut result = None;
         loop {
@@ -158,8 +156,11 @@ impl<A, C, E, M> Lazy<A, C, E, M>
                     // TODO(tailhook) don't unblacklist right now, make
                     // a delay
                     self.blist.unlist(addr);
+
+                    let (tx, rx) = chan::new();
+                    // TODO(tailhook) store tx in active list
                     self.futures.push(Box::new(
-                        SinkFuture::new(addr, sink)));
+                        SinkFuture::new(addr, sink, rx)));
                 }
                 Err(FutureErr::CantConnect(sa, err)) => {
                     self.metrics.connection_error();
