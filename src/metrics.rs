@@ -1,6 +1,10 @@
 /// An object implementing trait may collect metrics of a connection pool
 pub trait Collect: Clone + Send + Sync {
-
+    fn connection_attempt(&self) {}
+    /// Connection established
+    fn connection(&self) {}
+    fn connection_error(&self) {}
+    fn disconnect(&self) {}
 }
 
 

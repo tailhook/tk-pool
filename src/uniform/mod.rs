@@ -20,11 +20,11 @@ use uniform::failures::Blacklist;
 use uniform::connect::ConnectFuture;
 use queue::Done;
 
-type Fut<E, F> = Box<Future<Item=FutureOk<E, F>, Error=FutureErr<E, F>>>;
+type Fut<S, E, F> = Box<Future<Item=FutureOk<S>, Error=FutureErr<E, F>>>;
 
 
-pub enum FutureOk<E, F> {
-    Connected(Fut<E, F>),
+pub enum FutureOk<S> {
+    Connected(SocketAddr, S),
 }
 
 pub enum FutureErr<E, F> {
@@ -40,10 +40,11 @@ pub struct LazyUniform {
 
 pub struct Lazy<A, C, E, M>
     where E: ErrorLog,
+          C: Connect,
 {
     conn_limit: u32,
     reconnect_ms: (u64, u64),  // easier to make random value
-    futures: FuturesUnordered<Fut<E::ConnectionError, E::SinkError>>,
+    futures: FuturesUnordered<Fut<<C::Future as Future>::Item, E::ConnectionError, E::SinkError>>,
     address: A,
     connector: C,
     errors: E,
@@ -137,8 +138,10 @@ impl<A, C, E, M> Lazy<A, C, E, M>
         let ref blist = self.blist;
         let new = self.aligner.get(self.conn_limit, |a| blist.is_failing(a));
         if let Some(addr) = new {
+            self.metrics.connection_attempt();
             self.futures.push(
-                Box::new(ConnectFuture::new(self.connector.connect(addr))));
+                Box::new(ConnectFuture::new(addr,
+                    self.connector.connect(addr))));
             return Some(addr);
         }
         return None;
@@ -147,10 +150,12 @@ impl<A, C, E, M> Lazy<A, C, E, M>
         loop {
             match self.futures.poll() {
                 Ok(Async::NotReady) => break,
-                Ok(Async::Ready(Some(FutureOk::Connected(future)))) => {
+                Ok(Async::Ready(Some(FutureOk::Connected(addr, future)))) => {
+                    self.metrics.connection();
                     unimplemented!();
                 }
                 Err(FutureErr::CantConnect(sa, err)) => {
+                    self.metrics.connection_error();
                     self.errors.connection_error(sa, err);
                     let (min, max) = self.reconnect_ms;
                     let dur = Duration::from_millis(
@@ -159,6 +164,7 @@ impl<A, C, E, M> Lazy<A, C, E, M>
                     self.aligner.put(sa);
                 }
                 Err(FutureErr::Disconnected(sa, err)) => {
+                    self.metrics.disconnect();
                     // TODO(tailhook) blacklist connection if it was
                     // recently connected
                     self.errors.sink_error(sa, err);
