@@ -52,6 +52,9 @@ impl Blacklist {
         self.heap.push(Pair(time, addr));
         self.addrs.insert(addr);
     }
+    pub fn unlist(&mut self, addr: SocketAddr) {
+        // TODO(tailhook) do something
+    }
     pub fn is_failing(&self, addr: SocketAddr) -> bool {
         return self.addrs.contains(&addr);
     }

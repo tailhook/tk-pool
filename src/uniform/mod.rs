@@ -1,6 +1,7 @@
 mod failures;
 mod aligner;
 mod connect;
+mod sink;
 
 use std::time::{Duration, Instant};
 use std::net::SocketAddr;
@@ -19,6 +20,8 @@ use uniform::aligner::Aligner;
 use uniform::failures::Blacklist;
 use uniform::connect::ConnectFuture;
 use queue::Done;
+use uniform::sink::SinkFuture;
+
 
 type Fut<S, E, F> = Box<Future<Item=FutureOk<S>, Error=FutureErr<E, F>>>;
 
@@ -150,9 +153,13 @@ impl<A, C, E, M> Lazy<A, C, E, M>
         loop {
             match self.futures.poll() {
                 Ok(Async::NotReady) => break,
-                Ok(Async::Ready(Some(FutureOk::Connected(addr, future)))) => {
+                Ok(Async::Ready(Some(FutureOk::Connected(addr, sink)))) => {
                     self.metrics.connection();
-                    unimplemented!();
+                    // TODO(tailhook) don't unblacklist right now, make
+                    // a delay
+                    self.blist.unlist(addr);
+                    self.futures.push(Box::new(
+                        SinkFuture::new(addr, sink)));
                 }
                 Err(FutureErr::CantConnect(sa, err)) => {
                     self.metrics.connection_error();
@@ -160,6 +167,7 @@ impl<A, C, E, M> Lazy<A, C, E, M>
                     let (min, max) = self.reconnect_ms;
                     let dur = Duration::from_millis(
                             thread_rng().gen_range(min, max));
+                    self.metrics.blacklist_add();
                     self.blist.blacklist(sa, Instant::now() + dur);
                     self.aligner.put(sa);
                 }
@@ -200,13 +208,21 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
             return Ok(AsyncSink::NotReady(v));
         } else {
             self.check_for_address_updates();
-            while let Some(addr) = self.do_connect() {
-                self.poll_futures();
-                if !self.blist.is_failing(addr) {
-                    break;
+            loop {
+                while let Some(addr) = self.do_connect() {
+                    self.poll_futures();
+                    if !self.blist.is_failing(addr) {
+                        // Waiting for connect
+                        return Ok(AsyncSink::NotReady(v));
+                    }
+                }
+                if let Async::Ready(_) = self.blist.poll() {
+                    self.metrics.blacklist_remove();
+                } else {
+                    // log backpressure issue, not sure how
+                    return Ok(AsyncSink::NotReady(v));
                 }
             }
-            return Ok(AsyncSink::NotReady(v));
         }
     }
     fn poll_complete(&mut self) -> Result<Async<()>, Done> {

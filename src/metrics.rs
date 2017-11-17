@@ -5,6 +5,9 @@ pub trait Collect: Clone + Send + Sync {
     fn connection(&self) {}
     fn connection_error(&self) {}
     fn disconnect(&self) {}
+
+    fn blacklist_add(&self) {}
+    fn blacklist_remove(&self) {}
 }
 
 
