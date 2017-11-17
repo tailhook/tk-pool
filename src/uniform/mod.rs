@@ -25,9 +25,6 @@ use uniform::failures::Blacklist;
 use uniform::sink::SinkFuture;
 
 
-type Fut<S, E, F> = Box<Future<Item=FutureOk<S>, Error=FutureErr<E, F>>>;
-
-
 pub enum FutureOk<S> {
     Connected(SocketAddr, S),
 }
@@ -49,7 +46,9 @@ pub struct Lazy<A, C, E, M>
 {
     conn_limit: u32,
     reconnect_ms: (u64, u64),  // easier to make random value
-    futures: FuturesUnordered<Fut<<C::Future as Future>::Item, E::ConnectionError, E::SinkError>>,
+    futures: FuturesUnordered<Box<Future<
+        Item=FutureOk<<C::Future as Future>::Item>,
+        Error=FutureErr<E::ConnectionError, E::SinkError>>>>,
     address: A,
     connector: C,
     errors: E,
