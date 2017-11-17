@@ -20,13 +20,16 @@ use uniform::failures::Blacklist;
 use uniform::connect::ConnectFuture;
 use queue::Done;
 
+type Fut<E, F> = Box<Future<Item=FutureOk<E, F>, Error=FutureErr<E, F>>>;
 
-pub enum FutureOk {
-    Connected(Box<Future<Item=FutureOk, Error=FutureErr>>),
+
+pub enum FutureOk<E, F> {
+    Connected(Fut<E, F>),
 }
 
-pub enum FutureErr {
-    Failed(SocketAddr),
+pub enum FutureErr<E, F> {
+    CantConnect(SocketAddr, E),
+    Disconnected(SocketAddr, F),
 }
 
 /// A constructor for a uniform connection pool with lazy connections
@@ -35,10 +38,12 @@ pub struct LazyUniform {
     pub(crate) reconnect_timeout: Duration,
 }
 
-pub struct Lazy<A, C, E, M> {
+pub struct Lazy<A, C, E, M>
+    where E: ErrorLog,
+{
     conn_limit: u32,
     reconnect_ms: (u64, u64),  // easier to make random value
-    futures: FuturesUnordered<Box<Future<Item=FutureOk, Error=FutureErr>>>,
+    futures: FuturesUnordered<Fut<E::ConnectionError, E::SinkError>>,
     address: A,
     connector: C,
     errors: E,
@@ -83,7 +88,11 @@ impl<A, C, E, M> NewMux<A, C, E, M> for LazyUniform
 impl<A, C, E, M> Lazy<A, C, E, M>
     where A: Stream<Item=Address, Error=Void>,
           C: Connect + 'static,
-          E: ErrorLog<ConnectionError=<C::Future as Future>::Error>,
+          <<C as Connect>::Future as Future>::Item: Sink,
+          E: ErrorLog<
+            ConnectionError=<C::Future as Future>::Error,
+            SinkError=<<C::Future as Future>::Item as Sink>::SinkError,
+          >,
           M: Collect,
 {
 
@@ -134,12 +143,32 @@ impl<A, C, E, M> Lazy<A, C, E, M>
         }
         return None;
     }
-    fn poll_shutdown(&mut self) -> bool {
-        unimplemented!();
-        //match self.futures.poll() {
-        //    Ok(_) => {}
-        //    Err(_) => {}
-        //}
+    fn poll_futures(&mut self) {
+        loop {
+            match self.futures.poll() {
+                Ok(Async::NotReady) => break,
+                Ok(Async::Ready(Some(FutureOk::Connected(future)))) => {
+                    unimplemented!();
+                }
+                Err(FutureErr::CantConnect(sa, err)) => {
+                    self.errors.connection_error(sa, err);
+                    let (min, max) = self.reconnect_ms;
+                    let dur = Duration::from_millis(
+                            thread_rng().gen_range(min, max));
+                    self.blist.blacklist(sa, Instant::now() + dur);
+                    self.aligner.put(sa);
+                }
+                Err(FutureErr::Disconnected(sa, err)) => {
+                    // TODO(tailhook) blacklist connection if it was
+                    // recently connected
+                    self.errors.sink_error(sa, err);
+                    self.aligner.put(sa);
+                }
+                // we just put another future and it did not exit
+                // yet
+                Ok(Async::Ready(None)) => unreachable!(),
+            }
+        }
     }
 }
 
@@ -158,37 +187,17 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
         -> Result<AsyncSink<Self::SinkItem>, Done>
     {
         if self.shutdown {
-            if self.poll_shutdown() {
+            self.poll_futures();
+            if self.futures.len() == 0 {
                 return Err(Done);
             }
             return Ok(AsyncSink::NotReady(v));
         } else {
             self.check_for_address_updates();
             while let Some(addr) = self.do_connect() {
-                match self.futures.poll() {
-                    Ok(Async::NotReady) => break,
-                    Ok(Async::Ready(Some(FutureOk::Connected(future)))) => {
-                        unimplemented!();
-                    }
-                    Err(FutureErr::Failed(sa)) => {
-                        let (min, max) = self.reconnect_ms;
-                        let dur = Duration::from_millis(
-                                thread_rng().gen_range(min, max));
-                        self.blist.blacklist(sa, Instant::now() + dur);
-                        self.aligner.put(sa);
-                        if sa == addr {
-                            // this address just failed,
-                            // let's try to find another
-                            continue;
-                        } else {
-                            // another address has failed let's wait this one
-                            // a bit
-                            break;
-                        }
-                    }
-                    // we just put another future and it did not exit
-                    // yet
-                    Ok(Async::Ready(None)) => unreachable!(),
+                self.poll_futures();
+                if !self.blist.is_failing(addr) {
+                    break;
                 }
             }
             return Ok(AsyncSink::NotReady(v));
@@ -196,34 +205,21 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
     }
     fn poll_complete(&mut self) -> Result<Async<()>, Done> {
         if self.shutdown {
-            if self.poll_shutdown() {
+            self.poll_futures();
+            if self.futures.len() == 0 {
                 return Err(Done);
             }
             return Ok(Async::NotReady);
         } else {
-            loop {
-                match self.futures.poll() {
-                    Ok(Async::NotReady) => break,
-                    Ok(Async::Ready(None)) => break,
-                    Ok(Async::Ready(Some(FutureOk::Connected(future)))) => {
-                        unimplemented!();
-                    }
-                    Err(FutureErr::Failed(sa)) => {
-                        let (min, max) = self.reconnect_ms;
-                        let dur = Duration::from_millis(
-                                thread_rng().gen_range(min, max));
-                        self.blist.blacklist(sa, Instant::now() + dur);
-                        self.aligner.put(sa);
-                    }
-                }
-            }
+            self.poll_futures();
         }
         // TODO(tailhook) check if there is a space
         return Ok(Async::Ready(()));
     }
     fn close(&mut self) -> Result<Async<()>, Done> {
         self.shutdown = true;
-        if self.poll_shutdown() {
+        self.poll_futures();
+        if self.futures.len() == 0 {
             return Ok(Async::Ready(()));
         }
         return Ok(Async::NotReady);

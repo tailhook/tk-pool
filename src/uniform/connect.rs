@@ -1,4 +1,4 @@
-use futures::{Future, Async};
+use futures::{Future, Async, Sink};
 
 use uniform::{FutureOk, FutureErr};
 
@@ -15,10 +15,12 @@ impl<F: Future> ConnectFuture<F> {
     }
 }
 
-impl<F: Future> Future for ConnectFuture<F> {
-    type Item = FutureOk;
-    type Error = FutureErr;
-    fn poll(&mut self) -> Result<Async<FutureOk>, FutureErr> {
+impl<F: Future> Future for ConnectFuture<F>
+    where F::Item: Sink,
+{
+    type Item = FutureOk<F::Error, <F::Item as Sink>::SinkError>;
+    type Error = FutureErr<F::Error, <F::Item as Sink>::SinkError>;
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
         unimplemented!();
     }
 }

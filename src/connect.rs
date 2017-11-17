@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use futures::{Future};
+use futures::{Future, IntoFuture};
 
 
 /// This is a trait that is used for establishing a connection
@@ -15,10 +15,10 @@ pub trait Connect {
 
 impl<T, F> Connect for T
     where T: FnMut(SocketAddr) -> F,
-          F: Future,
+          F: IntoFuture,
 {
-    type Future = T::Output;
-    fn connect(&mut self, address: SocketAddr) -> T::Output {
-        (self)(address)
+    type Future = <T::Output as IntoFuture>::Future;
+    fn connect(&mut self, address: SocketAddr) -> Self::Future {
+        (self)(address).into_future()
     }
 }
