@@ -182,7 +182,7 @@ mod test {
 
         a.update(vec![addr(4)], vec![addr(2)]);
         for _ in 0..8 {
-            *counter.entry(a.get(100, |x| false).unwrap()).or_insert(0) += 1;
+            *counter.entry(a.get(100, |_| false).unwrap()).or_insert(0) += 1;
         }
         assert_eq!(counter, vec![
             (addr(1), 4),
