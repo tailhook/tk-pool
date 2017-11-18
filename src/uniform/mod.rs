@@ -5,7 +5,7 @@ mod failures;
 mod sink;
 
 use std::cell::RefCell;
-use std::collections::{VecDeque};
+use std::collections::{VecDeque, HashSet};
 use std::net::SocketAddr;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -43,8 +43,9 @@ pub struct LazyUniform {
     pub(crate) reconnect_timeout: Duration,
 }
 
-pub struct Active<I> {
+pub struct Connections<I> {
     queue: VecDeque<Controller<I>>,
+    all: HashSet<Controller<I>>,
 }
 
 pub struct Lazy<A, C, E, M>
@@ -57,7 +58,7 @@ pub struct Lazy<A, C, E, M>
     futures: FuturesUnordered<Box<Future<
         Item=FutureOk<<C::Future as Future>::Item>,
         Error=FutureErr<E::ConnectionError, E::SinkError>>>>,
-    active: Rc<RefCell<Active<
+    connections: Rc<RefCell<Connections<
         <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem>>>,
     address: A,
     connector: C,
@@ -69,10 +70,11 @@ pub struct Lazy<A, C, E, M>
     shutdown: bool,
 }
 
-impl<I> Active<I> {
-    fn new() -> Active<I>{
-        Active {
+impl<I> Connections<I> {
+    fn new() -> Connections<I>{
+        Connections {
             queue: VecDeque::new(),
+            all: HashSet::new(),
         }
     }
     fn add(&mut self, ctr: Controller<I>) {
@@ -119,7 +121,7 @@ impl<A, C, E, M> NewMux<A, C, E, M> for LazyUniform
             conn_limit: self.conn_limit,
             reconnect_ms: (reconn_ms / 2, reconn_ms * 3 / 2),
             futures: FuturesUnordered::new(),
-            active: Rc::new(RefCell::new(Active::new())),
+            connections: Rc::new(RefCell::new(Connections::new())),
             blist: Blacklist::new(h),
             aligner: Aligner::new(),
             shutdown: false,
@@ -193,7 +195,9 @@ impl<A, C, E, M> Lazy<A, C, E, M>
                 Ok(Async::NotReady) => break,
                 Ok(Async::Ready(Some(FutureOk::Connected(addr, sink)))) => {
                     self.metrics.connection();
-                    let task = Helper::new(addr, self.active.clone());
+                    let task = Helper::new(addr, self.connections.clone());
+                    self.connections.borrow_mut()
+                        .all.insert(task.controller());
                     // helper will add itself to the active queue on wakeup
                     self.futures.push(Box::new(SinkFuture::new(sink, task)));
                 }
@@ -245,7 +249,7 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
         } else {
             self.check_for_address_updates();
             loop {
-                let ctr = self.active.borrow_mut().next();
+                let ctr = self.connections.borrow_mut().next();
                 if let Some(ctr) = ctr {
                     if ctr.is_closed() { continue }
                     ctr.request(v);

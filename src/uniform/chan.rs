@@ -1,9 +1,10 @@
 use std::rc::Rc;
 use std::cell::RefCell;
 use std::net::SocketAddr;
+use std::hash::{Hash, Hasher};
 
 use futures::task::{self, Task};
-use uniform::Active;
+use uniform::Connections;
 
 
 pub enum Action<I> {
@@ -14,7 +15,7 @@ pub enum Action<I> {
 pub(in uniform) struct Inner<I> {
     addr: SocketAddr,
     request: Option<I>,
-    active: Rc<RefCell<Active<I>>>,
+    connections: Rc<RefCell<Connections<I>>>,
     task: Option<Task>,
     pub(in uniform) queued: bool,
     // TODO(tailhook) verify that close flag is okay
@@ -29,12 +30,26 @@ pub struct Helper<I> {
     pub(in uniform) inner: Rc<RefCell<Inner<I>>>,
 }
 
+impl<I> PartialEq for Controller<I> {
+    fn eq(&self, other: &Controller<I>) -> bool {
+        &*self.inner.borrow() as *const _ == &*other.inner.borrow() as *const _
+    }
+}
+
+impl<I> Eq for Controller<I> {}
+
+impl<I> Hash for Controller<I> {
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        hasher.write_usize((&*self.inner.borrow() as *const _) as usize);
+    }
+}
+
 impl<I> Helper<I> {
-    pub fn new(addr: SocketAddr, active: Rc<RefCell<Active<I>>>)
+    pub fn new(addr: SocketAddr, connections: Rc<RefCell<Connections<I>>>)
         -> Helper<I>
     {
         let inner = Rc::new(RefCell::new(Inner {
-            addr, active,
+            addr, connections,
             task: None,
             queued: false,
             closed: false,
@@ -60,15 +75,15 @@ impl<I> Helper<I> {
         assert!(!cell.queued);
     }
     pub fn requeue(&self) {
-        let active = {
+        let connections = {
             let mut cell = self.inner.borrow_mut();
             cell.task = Some(task::current());
             if cell.queued {
                 return;
             }
-            cell.active.clone()
+            cell.connections.clone()
         };
-        active.borrow_mut().add(self.controller());
+        connections.borrow_mut().add(self.controller());
     }
     pub fn closed(&self) {
         self.inner.borrow_mut().closed = true;
@@ -95,12 +110,9 @@ impl<I> Controller<I> {
     }
 }
 
-// TODO(tailhook) check for closed or queued flag in Drop but only when
-// drop is implemented in LazyUniform. And that will only be reasonably
-// possible if `FuturesUnordered::iter_mut()` is implemented
-//
-// impl<I> Drop for Helper<I> {
-//     fn drop(&mut self) {
-//         assert!(self.inner.borrow().closed);
-//     }
-// }
+impl<I> Drop for Helper<I> {
+    fn drop(&mut self) {
+        let con = self.inner.borrow().connections.clone();
+        con.borrow_mut().all.remove(&self.controller());
+    }
+}
