@@ -4,8 +4,11 @@ mod connect;
 mod failures;
 mod sink;
 
-use std::time::{Duration, Instant};
+use std::cell::RefCell;
+use std::collections::{VecDeque};
 use std::net::SocketAddr;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use abstract_ns::Address;
 use futures::{Future, Async, Sink, AsyncSink, Stream};
@@ -19,7 +22,7 @@ use connect::Connect;
 use metrics::Collect;
 use queue::Done;
 use uniform::aligner::Aligner;
-use uniform::chan::{Action, Sender};
+use uniform::chan::{Controller, Helper};
 use uniform::connect::ConnectFuture;
 use uniform::failures::Blacklist;
 use uniform::sink::SinkFuture;
@@ -40,15 +43,22 @@ pub struct LazyUniform {
     pub(crate) reconnect_timeout: Duration,
 }
 
+pub struct Active<I> {
+    queue: VecDeque<Controller<I>>,
+}
+
 pub struct Lazy<A, C, E, M>
     where E: ErrorLog,
           C: Connect,
+          <<C as Connect>::Future as Future>::Item: Sink,
 {
     conn_limit: u32,
     reconnect_ms: (u64, u64),  // easier to make random value
     futures: FuturesUnordered<Box<Future<
         Item=FutureOk<<C::Future as Future>::Item>,
         Error=FutureErr<E::ConnectionError, E::SinkError>>>>,
+    active: Rc<RefCell<Active<
+        <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem>>>,
     address: A,
     connector: C,
     errors: E,
@@ -57,6 +67,34 @@ pub struct Lazy<A, C, E, M>
     blist: Blacklist,
     cur_address: Address,
     shutdown: bool,
+}
+
+impl<I> Active<I> {
+    fn new() -> Active<I>{
+        Active {
+            queue: VecDeque::new(),
+        }
+    }
+    fn add(&mut self, ctr: Controller<I>) {
+        {
+            let mut inner = ctr.inner.borrow_mut();
+            assert!(!inner.closed);
+            assert!(!inner.queued);
+            inner.queued = true;
+        }
+        self.queue.push_back(ctr);
+    }
+    fn next(&mut self) -> Option<Controller<I>> {
+        self.queue.pop_front()
+        .map(|ctr| {
+            {
+                let mut inner = ctr.inner.borrow_mut();
+                assert!(inner.queued);
+                inner.queued = false;
+            }
+            ctr
+        })
+    }
 }
 
 impl<A, C, E, M> NewMux<A, C, E, M> for LazyUniform
@@ -81,6 +119,7 @@ impl<A, C, E, M> NewMux<A, C, E, M> for LazyUniform
             conn_limit: self.conn_limit,
             reconnect_ms: (reconn_ms / 2, reconn_ms * 3 / 2),
             futures: FuturesUnordered::new(),
+            active: Rc::new(RefCell::new(Active::new())),
             blist: Blacklist::new(h),
             aligner: Aligner::new(),
             shutdown: false,
@@ -98,7 +137,7 @@ impl<A, C, E, M> Lazy<A, C, E, M>
             ConnectionError=<C::Future as Future>::Error,
             SinkError=<<C::Future as Future>::Item as Sink>::SinkError,
           >,
-          M: Collect,
+          M: Collect + 'static,
 {
     fn new_addr(&mut self) -> Option<Address> {
         let mut result = None;
@@ -132,6 +171,7 @@ impl<A, C, E, M> Lazy<A, C, E, M>
         debug!("New address, to be retired {:?}, \
                 to be connected {:?}", old, new);
         self.aligner.update(new, old);
+        self.cur_address = new_addr;
         // TODO(tailhook) retire old connections
     }
     fn do_connect(&mut self) -> Option<SocketAddr> {
@@ -142,6 +182,7 @@ impl<A, C, E, M> Lazy<A, C, E, M>
             self.futures.push(
                 Box::new(ConnectFuture::new(addr,
                     self.connector.connect(addr))));
+            debug!("Connecting to {}", addr);
             return Some(addr);
         }
         return None;
@@ -156,10 +197,9 @@ impl<A, C, E, M> Lazy<A, C, E, M>
                     // a delay
                     self.blist.unlist(addr);
 
-                    let (tx, rx) = chan::new();
-                    // TODO(tailhook) store tx in active list
-                    self.futures.push(Box::new(
-                        SinkFuture::new(addr, sink, rx)));
+                    let task = Helper::new(addr, self.active.clone());
+                    // helper will add itself to the active queue on wakeup
+                    self.futures.push(Box::new(SinkFuture::new(sink, task)));
                 }
                 Err(FutureErr::CantConnect(sa, err)) => {
                     self.metrics.connection_error();
@@ -193,11 +233,11 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
           E: ErrorLog<
             ConnectionError=<C::Future as Future>::Error,
             SinkError=<<C::Future as Future>::Item as Sink>::SinkError>,
-          M: Collect,
+          M: Collect + 'static,
 {
     type SinkItem = <<C::Future as Future>::Item as Sink>::SinkItem;
     type SinkError = Done;
-    fn start_send(&mut self, v: Self::SinkItem)
+    fn start_send(&mut self, mut v: Self::SinkItem)
         -> Result<AsyncSink<Self::SinkItem>, Done>
     {
         if self.shutdown {
@@ -208,6 +248,24 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
             return Ok(AsyncSink::NotReady(v));
         } else {
             self.check_for_address_updates();
+            loop {
+                let ctr = self.active.borrow_mut().next();
+                if let Some(ctr) = ctr {
+                    if ctr.is_closed() { continue }
+                    ctr.request(v);
+                    self.poll_futures();
+                    if let Some(request) = ctr.request_back() {
+                        v = request;
+                        continue;
+                    } else {
+                        // Note: we assume that controller put itself back
+                        // to the active queue
+                        return Ok(AsyncSink::Ready);
+                    }
+                } else {
+                    break;
+                }
+            }
             loop {
                 while let Some(addr) = self.do_connect() {
                     self.poll_futures();
@@ -235,11 +293,13 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
         } else {
             self.poll_futures();
         }
-        // TODO(tailhook) check if there is a space
-        return Ok(Async::Ready(()));
+        // TODO(tailhook) maybe we can track if connections have everything
+        // flushed
+        return Ok(Async::NotReady);
     }
     fn close(&mut self) -> Result<Async<()>, Done> {
         self.shutdown = true;
+        // TODO(tailhook) close underlying sinks
         self.poll_futures();
         if self.futures.len() == 0 {
             return Ok(Async::Ready(()));
@@ -247,3 +307,4 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
         return Ok(Async::NotReady);
     }
 }
+
