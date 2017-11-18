@@ -193,10 +193,6 @@ impl<A, C, E, M> Lazy<A, C, E, M>
                 Ok(Async::NotReady) => break,
                 Ok(Async::Ready(Some(FutureOk::Connected(addr, sink)))) => {
                     self.metrics.connection();
-                    // TODO(tailhook) don't unblacklist right now, make
-                    // a delay
-                    self.blist.unlist(addr);
-
                     let task = Helper::new(addr, self.active.clone());
                     // helper will add itself to the active queue on wakeup
                     self.futures.push(Box::new(SinkFuture::new(sink, task)));
