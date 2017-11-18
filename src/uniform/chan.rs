@@ -10,6 +10,7 @@ use uniform::Connections;
 pub enum Action<I> {
     StartSend(I),
     Poll,
+    Close,
 }
 
 pub(in uniform) struct Inner<I> {
@@ -64,6 +65,9 @@ impl<I> Helper<I> {
     }
     pub fn take(&self) -> Action<I> {
         let mut cell = self.inner.borrow_mut();
+        if cell.closed {
+            return Action::Close;
+        }
         match cell.request.take() {
             Some(item) => Action::StartSend(item),
             None => Action::Poll,
@@ -94,6 +98,11 @@ impl<I> Helper<I> {
 }
 
 impl<I> Controller<I> {
+    pub fn close(&self) {
+        let mut inner = self.inner.borrow_mut();
+        inner.closed = true;
+        inner.task.as_ref().map(|x| x.notify());
+    }
     pub fn is_closed(&self) -> bool {
         self.inner.borrow().closed
     }

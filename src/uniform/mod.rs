@@ -30,6 +30,7 @@ use uniform::sink::SinkFuture;
 
 pub enum FutureOk<S> {
     Connected(SocketAddr, S),
+    Closed(SocketAddr),
 }
 
 pub enum FutureErr<E, F> {
@@ -67,7 +68,7 @@ pub struct Lazy<A, C, E, M>
     aligner: Aligner,
     blist: Blacklist,
     cur_address: Address,
-    shutdown: bool,
+    closing: bool,
 }
 
 impl<I> Connections<I> {
@@ -124,7 +125,7 @@ impl<A, C, E, M> NewMux<A, C, E, M> for LazyUniform
             connections: Rc::new(RefCell::new(Connections::new())),
             blist: Blacklist::new(h),
             aligner: Aligner::new(),
-            shutdown: false,
+            closing: false,
             cur_address: [][..].into(),
             address, connector, errors, metrics,
         }
@@ -147,7 +148,7 @@ impl<A, C, E, M> Lazy<A, C, E, M>
             match self.address.poll() {
                 Ok(Async::Ready(Some(addr))) => result = Some(addr),
                 Ok(Async::Ready(None)) => {
-                    self.shutdown = true;
+                    self.start_closing();
                     result = None;
                     break;
                 }
@@ -189,10 +190,19 @@ impl<A, C, E, M> Lazy<A, C, E, M>
         }
         return None;
     }
+    fn start_closing(&mut self) {
+        if !self.closing {
+            self.closing = true;
+            for conn in &self.connections.borrow_mut().all {
+                conn.close();
+            }
+        }
+    }
     fn poll_futures(&mut self) {
         loop {
             match self.futures.poll() {
                 Ok(Async::NotReady) => break,
+                Ok(Async::Ready(None)) => break,
                 Ok(Async::Ready(Some(FutureOk::Connected(addr, sink)))) => {
                     self.metrics.connection();
                     let task = Helper::new(addr, self.connections.clone());
@@ -218,9 +228,9 @@ impl<A, C, E, M> Lazy<A, C, E, M>
                     self.errors.sink_error(sa, err);
                     self.aligner.put(sa);
                 }
-                // we just put another future and it did not exit
-                // yet
-                Ok(Async::Ready(None)) => unreachable!(),
+                Ok(Async::Ready(Some(FutureOk::Closed(_)))) => {
+                    self.metrics.disconnect();
+                }
             }
         }
     }
@@ -240,7 +250,7 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
     fn start_send(&mut self, mut v: Self::SinkItem)
         -> Result<AsyncSink<Self::SinkItem>, Done>
     {
-        if self.shutdown {
+        if self.closing {
             self.poll_futures();
             if self.futures.len() == 0 {
                 return Err(Done);
@@ -284,7 +294,7 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
         }
     }
     fn poll_complete(&mut self) -> Result<Async<()>, Done> {
-        if self.shutdown {
+        if self.closing {
             self.poll_futures();
             if self.futures.len() == 0 {
                 return Err(Done);
@@ -298,7 +308,7 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
         return Ok(Async::NotReady);
     }
     fn close(&mut self) -> Result<Async<()>, Done> {
-        self.shutdown = true;
+        self.start_closing();
         // TODO(tailhook) close underlying sinks
         self.poll_futures();
         if self.futures.len() == 0 {

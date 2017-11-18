@@ -54,6 +54,16 @@ impl<S: Sink, E> Future for SinkFuture<S, E> {
                     Err(FutureErr::Disconnected(self.task.addr(), e))
                 }
             }
+            Action::Close => match self.sink.close() {
+                Ok(Async::Ready(()))  => {
+                    Ok(Async::Ready(FutureOk::Closed(self.task.addr())))
+                }
+                Ok(Async::NotReady)  => Ok(Async::NotReady),
+                Err(e) => {
+                    self.task.closed();
+                    Err(FutureErr::Disconnected(self.task.addr(), e))
+                }
+            }
         }
     }
 }
