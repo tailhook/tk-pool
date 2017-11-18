@@ -1,18 +1,25 @@
-use std::net::SocketAddr;
-
 use futures::{Future, Async, Sink};
 
 use uniform::{FutureOk, FutureErr};
+use uniform::chan::Helper;
 
 
-pub(crate) struct ConnectFuture<F> {
-    addr: SocketAddr,
+pub(crate) struct ConnectFuture<F>
+    where F: Future,
+          F::Item: Sink,
+{
+    task: Option<Helper<<F::Item as Sink>::SinkItem>>,
     future: F,
 }
 
-impl<F: Future> ConnectFuture<F> {
-    pub fn new(addr: SocketAddr, future: F) -> ConnectFuture<F> {
-        ConnectFuture { addr, future }
+impl<F: Future> ConnectFuture<F>
+    where F: Future,
+          F::Item: Sink,
+{
+    pub fn new(task: Helper<<F::Item as Sink>::SinkItem>, future: F)
+        -> ConnectFuture<F>
+    {
+        ConnectFuture { task: Some(task), future }
     }
 }
 
@@ -22,8 +29,21 @@ impl<F: Future> Future for ConnectFuture<F>
     type Item = FutureOk<F::Item>;
     type Error = FutureErr<F::Error, <F::Item as Sink>::SinkError>;
     fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
-        self.future.poll()
-        .map(|ready| ready.map(|s| FutureOk::Connected(self.addr, s)))
-        .map_err(|e| FutureErr::CantConnect(self.addr, e))
+        let snk = {
+            let task = self.task.as_ref().expect("poll invariant");
+            match task.poll_close() {
+                Async::Ready(()) => {
+                    return Ok(Async::Ready(FutureOk::Aborted(task.addr())));
+                }
+                Async::NotReady => {}
+            }
+            match self.future.poll() {
+                Ok(Async::Ready(s)) => s,
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(e) => return Err(FutureErr::CantConnect(task.addr(), e)),
+            }
+        };
+        let task = self.task.take().expect("poll invariant");
+        Ok(Async::Ready(FutureOk::Connected(task, snk)))
     }
 }

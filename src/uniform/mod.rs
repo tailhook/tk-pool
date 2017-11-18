@@ -28,8 +28,13 @@ use uniform::failures::Blacklist;
 use uniform::sink::SinkFuture;
 
 
-pub enum FutureOk<S> {
-    Connected(SocketAddr, S),
+pub enum FutureOk<S>
+    where S: Sink
+{
+    Connected(Helper<S::SinkItem>, S),
+    /// Aborted connect attempt (i.e. when establishing or handshaking)
+    Aborted(SocketAddr),
+    /// Closed working connection
     Closed(SocketAddr),
 }
 
@@ -173,17 +178,24 @@ impl<A, C, E, M> Lazy<A, C, E, M>
                        .compare_addresses(&new_addr.at(0));
         debug!("New address, to be retired {:?}, \
                 to be connected {:?}", old, new);
+        for task in &self.connections.borrow().all {
+            if old.contains(&task.addr()) {
+                task.close();
+            }
+        }
         self.aligner.update(new, old);
         self.cur_address = new_addr;
-        // TODO(tailhook) retire old connections
     }
     fn do_connect(&mut self) -> Option<SocketAddr> {
         let ref blist = self.blist;
         let new = self.aligner.get(self.conn_limit, |a| blist.is_failing(a));
         if let Some(addr) = new {
             self.metrics.connection_attempt();
+            let task = Helper::new(addr, self.connections.clone());
+            self.connections.borrow_mut()
+                .all.insert(task.controller());
             self.futures.push(
-                Box::new(ConnectFuture::new(addr,
+                Box::new(ConnectFuture::new(task,
                     self.connector.connect(addr))));
             debug!("Connecting to {}", addr);
             return Some(addr);
@@ -203,11 +215,8 @@ impl<A, C, E, M> Lazy<A, C, E, M>
             match self.futures.poll() {
                 Ok(Async::NotReady) => break,
                 Ok(Async::Ready(None)) => break,
-                Ok(Async::Ready(Some(FutureOk::Connected(addr, sink)))) => {
+                Ok(Async::Ready(Some(FutureOk::Connected(task, sink)))) => {
                     self.metrics.connection();
-                    let task = Helper::new(addr, self.connections.clone());
-                    self.connections.borrow_mut()
-                        .all.insert(task.controller());
                     // helper will add itself to the active queue on wakeup
                     self.futures.push(Box::new(SinkFuture::new(sink, task)));
                 }
@@ -227,6 +236,9 @@ impl<A, C, E, M> Lazy<A, C, E, M>
                     // recently connected
                     self.errors.sink_error(sa, err);
                     self.aligner.put(sa);
+                }
+                Ok(Async::Ready(Some(FutureOk::Aborted(_)))) => {
+                    self.metrics.connection_abort();
                 }
                 Ok(Async::Ready(Some(FutureOk::Closed(_)))) => {
                     self.metrics.disconnect();
@@ -309,7 +321,6 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
     }
     fn close(&mut self) -> Result<Async<()>, Done> {
         self.start_closing();
-        // TODO(tailhook) close underlying sinks
         self.poll_futures();
         if self.futures.len() == 0 {
             return Ok(Async::Ready(()));

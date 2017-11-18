@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::net::SocketAddr;
 use std::hash::{Hash, Hasher};
 
+use futures::Async;
 use futures::task::{self, Task};
 use uniform::Connections;
 
@@ -63,6 +64,15 @@ impl<I> Helper<I> {
             inner: self.inner.clone(),
         }
     }
+    pub fn poll_close(&self) -> Async<()> {
+        let mut cell = self.inner.borrow_mut();
+        cell.task = Some(task::current());
+        if cell.closed {
+            Async::Ready(())
+        } else {
+            Async::NotReady
+        }
+    }
     pub fn take(&self) -> Action<I> {
         let mut cell = self.inner.borrow_mut();
         if cell.closed {
@@ -116,6 +126,9 @@ impl<I> Controller<I> {
         assert!(inner.request.is_none());
         inner.request = Some(item);
         inner.task.as_ref().map(|x| x.notify());
+    }
+    pub fn addr(&self) -> SocketAddr {
+        self.inner.borrow().addr
     }
 }
 

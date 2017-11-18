@@ -1,6 +1,8 @@
 /// An object implementing trait may collect metrics of a connection pool
 pub trait Collect: Clone + Send + Sync {
     fn connection_attempt(&self) {}
+    /// Aborted connection attempt (name changed)
+    fn connection_abort(&self) {}
     /// Connection established
     fn connection(&self) {}
     fn connection_error(&self) {}
