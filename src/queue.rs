@@ -9,7 +9,7 @@ use tokio_core::reactor::Handle;
 
 use metrics::Collect;
 use error_log::{ErrorLog, ShutdownReason};
-use config::{NewQueue, Queue, DefaultQueue};
+use config::{Queue, DefaultQueue, private};
 
 
 /// Pool is an object you use to access a connection pool
@@ -23,10 +23,6 @@ pub struct Pool<V, M> {
     channel: Sender<V>,
     metrics: M,
 }
-
-
-pub struct Done;
-
 
 /// Error returned by the sink, when underlying pool is closed
 ///
@@ -46,11 +42,11 @@ struct ForwardFuture<S, M, E>
      sink: S,
 }
 
-impl<I: 'static, M> NewQueue<I, M> for DefaultQueue {
+impl<I: 'static, M> private::NewQueue<I, M> for DefaultQueue {
     type Pool = Pool<I, M>;
     fn spawn_on<S, E>(self, pool: S, err: E, metrics: M, handle: &Handle)
         -> Self::Pool
-        where S: Sink<SinkItem=I, SinkError=Done> + 'static,
+        where S: Sink<SinkItem=I, SinkError=private::Done> + 'static,
               E: ErrorLog + 'static,
               M: Collect + 'static,
     {
@@ -58,11 +54,11 @@ impl<I: 'static, M> NewQueue<I, M> for DefaultQueue {
     }
 }
 
-impl<I: 'static, M> NewQueue<I, M> for Queue {
+impl<I: 'static, M> private::NewQueue<I, M> for Queue {
     type Pool = Pool<I, M>;
     fn spawn_on<S, E>(self, pool: S, e: E, metrics: M, handle: &Handle)
         -> Self::Pool
-        where S: Sink<SinkItem=I, SinkError=Done> + 'static,
+        where S: Sink<SinkItem=I, SinkError=private::Done> + 'static,
               E: ErrorLog + 'static,
               M: Collect + 'static,
     {
@@ -97,7 +93,7 @@ impl<V, M: Clone> Clone for Pool<V, M> {
 }
 
 impl<S, M, E> ForwardFuture<S, M, E>
-    where S: Sink<SinkError=Done>,
+    where S: Sink<SinkError=private::Done>,
           M: Collect,
           E: ErrorLog,
 {
@@ -111,7 +107,7 @@ impl<S, M, E> ForwardFuture<S, M, E>
                     self.buffer = Some(item);
                     return Async::NotReady;
                 }
-                Err(Done) => return Async::Ready(()),
+                Err(private::Done) => return Async::Ready(()),
             }
         }
 
@@ -128,7 +124,7 @@ impl<S, M, E> ForwardFuture<S, M, E>
                             self.buffer = Some(item);
                             return Async::NotReady;
                         }
-                        Err(Done) => return Async::Ready(()),
+                        Err(private::Done) => return Async::Ready(()),
                     }
                 }
                 Ok(Async::Ready(None)) => {
@@ -140,7 +136,7 @@ impl<S, M, E> ForwardFuture<S, M, E>
                         Ok(Async::NotReady) => {
                             return Async::NotReady;
                         }
-                        Ok(Async::Ready(())) | Err(Done) => {
+                        Ok(Async::Ready(())) | Err(private::Done) => {
                             return Async::Ready(());
                         }
                     }
@@ -154,7 +150,7 @@ impl<S, M, E> ForwardFuture<S, M, E>
 }
 
 impl<S, M, E> Future for ForwardFuture<S, M, E>
-    where S: Sink<SinkError=Done>,
+    where S: Sink<SinkError=private::Done>,
           M: Collect,
           E: ErrorLog,
 {

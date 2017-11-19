@@ -14,7 +14,6 @@ use error_log::{ErrorLog, WarnLogger};
 use connect::Connect;
 use metrics::{self, Collect};
 use uniform::LazyUniform;
-use queue::Done;
 
 /// A constructor for metrics collector object used for connection pool
 pub trait NewMetrics {
@@ -23,17 +22,21 @@ pub trait NewMetrics {
 }
 
 /// A constructor for queue
-pub trait NewQueue<I, M> {
+///
+/// This trait is currently *sealed*, we will unseal it once it stabilized
+pub trait NewQueue<I, M>: private::NewQueue<I, M> {
+    /// Connection pool instance type
     type Pool;
-    fn spawn_on<S, E>(self, pool: S, e: E, metrics: M, handle: &Handle)
-        -> Self::Pool
-        where S: Sink<SinkItem=I, SinkError=Done> + 'static,
-              E: ErrorLog + 'static,
-              M: Collect + 'static;
+}
+
+impl<I, M, T: private::NewQueue<I, M>> NewQueue<I, M> for T {
+    type Pool = T::Pool;
 }
 
 /// A constructor for multiplexer
-pub trait NewMux<A, C, E, M>
+///
+/// This trait is currently *sealed*, we will unseal it once it stabilized
+pub trait NewMux<A, C, E, M>: private::NewMux<A, C, E, M>
     where A: Stream<Item=Address, Error=Void>,
           C: Connect + 'static,
           <<C as Connect>::Future as Future>::Item: Sink,
@@ -43,14 +46,48 @@ pub trait NewMux<A, C, E, M>
             >,
           E: 'static,
           M: Collect + 'static,
-{
-    type Sink: Sink<
-        SinkItem=<<C::Future as Future>::Item as Sink>::SinkItem,
-        SinkError=Done,
-    >;
-    fn construct(self,
-        h: &Handle, address: A, connector: C, errors: E, metrics: M)
-        -> Self::Sink;
+{}
+
+pub(crate) mod private {
+    use futures::{Stream, Future, Sink};
+    use void::Void;
+    use connect::Connect;
+    use metrics::Collect;
+    use error_log::ErrorLog;
+    use abstract_ns::Address;
+    use tokio_core::reactor::Handle;
+
+    pub struct Done;
+
+    pub trait NewMux<A, C, E, M>
+        where A: Stream<Item=Address, Error=Void>,
+              C: Connect + 'static,
+              <<C as Connect>::Future as Future>::Item: Sink,
+              E: ErrorLog<
+                ConnectionError=<C::Future as Future>::Error,
+                SinkError=<<C::Future as Future>::Item as Sink>::SinkError,
+                >,
+              E: 'static,
+              M: Collect + 'static,
+    {
+        type Sink: Sink<
+            SinkItem=<<C::Future as Future>::Item as Sink>::SinkItem,
+            SinkError=Done,
+        >;
+        fn construct(self,
+            h: &Handle, address: A, connector: C, errors: E, metrics: M)
+            -> Self::Sink;
+    }
+
+    pub trait NewQueue<I, M> {
+        type Pool;
+        fn spawn_on<S, E>(self, pool: S, e: E, metrics: M, handle: &Handle)
+            -> Self::Pool
+            where S: Sink<SinkItem=I, SinkError=Done> + 'static,
+                  E: ErrorLog + 'static,
+                  M: Collect + 'static;
+    }
+
 }
 
 /// A constructor for error log
@@ -124,7 +161,7 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
               M: NewMetrics,
               M::Collect: 'static,
               X: NewMux<A, C, E::ErrorLog, M::Collect>,
-              <X as NewMux<A, C, E::ErrorLog, M::Collect>>::Sink: 'static,
+              <X as private::NewMux<A, C, E::ErrorLog, M::Collect>>::Sink: 'static,
               E: NewErrorLog<
                 <<C as Connect>::Future as Future>::Error,
                 <<<C as Connect>::Future as Future>::Item as Sink>::SinkError,
@@ -133,6 +170,10 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
               Q: NewQueue<
                 <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
                 <M as NewMetrics>::Collect,
+                Pool=<Q as private::NewQueue<
+                    <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem,
+                    <M as NewMetrics>::Collect,
+                >>::Pool
               >,
 
     {

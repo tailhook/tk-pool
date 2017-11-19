@@ -10,6 +10,7 @@ mod chan;
 mod connect;
 mod failures;
 mod sink;
+mod pool;
 
 use std::cell::RefCell;
 use std::collections::{VecDeque, HashSet};
@@ -24,16 +25,16 @@ use rand::{thread_rng, Rng};
 use tokio_core::reactor::Handle;
 use void::{Void, unreachable};
 
-use config::{NewMux};
+use config::{NewMux, private};
 use error_log::{ErrorLog, ShutdownReason};
 use connect::Connect;
 use metrics::Collect;
-use queue::Done;
 use uniform::aligner::Aligner;
 use uniform::chan::{Controller, Helper};
 use uniform::connect::ConnectFuture;
 use uniform::failures::Blacklist;
 use uniform::sink::SinkFuture;
+use uniform::pool::Lazy;
 
 
 enum FutureOk<S>
@@ -60,28 +61,6 @@ pub struct LazyUniform {
 struct Connections<I> {
     queue: VecDeque<Controller<I>>,
     all: HashSet<Controller<I>>,
-}
-
-pub struct Lazy<A, C, E, M>
-    where E: ErrorLog,
-          C: Connect,
-          <<C as Connect>::Future as Future>::Item: Sink,
-{
-    conn_limit: u32,
-    reconnect_ms: (u64, u64),  // easier to make random value
-    futures: FuturesUnordered<Box<Future<
-        Item=FutureOk<<C::Future as Future>::Item>,
-        Error=FutureErr<E::ConnectionError, E::SinkError>>>>,
-    connections: Rc<RefCell<Connections<
-        <<<C as Connect>::Future as Future>::Item as Sink>::SinkItem>>>,
-    address: A,
-    connector: C,
-    errors: E,
-    metrics: M,
-    aligner: Aligner,
-    blist: Blacklist,
-    cur_address: Address,
-    closing: bool,
 }
 
 impl<I> Connections<I> {
@@ -112,8 +91,19 @@ impl<I> Connections<I> {
         })
     }
 }
-
 impl<A, C, E, M> NewMux<A, C, E, M> for LazyUniform
+    where A: Stream<Item=Address, Error=Void>,
+          C: Connect + 'static,
+          <<C as Connect>::Future as Future>::Item: Sink,
+          E: ErrorLog<
+            ConnectionError=<C::Future as Future>::Error,
+            SinkError=<<C::Future as Future>::Item as Sink>::SinkError,
+            >,
+          E: 'static,
+          M: Collect + 'static,
+{}
+
+impl<A, C, E, M> private::NewMux<A, C, E, M> for LazyUniform
     where A: Stream<Item=Address, Error=Void>,
           C: Connect + 'static,
           <<C as Connect>::Future as Future>::Item: Sink,
@@ -268,14 +258,14 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
           M: Collect + 'static,
 {
     type SinkItem = <<C::Future as Future>::Item as Sink>::SinkItem;
-    type SinkError = Done;
+    type SinkError = private::Done;
     fn start_send(&mut self, mut v: Self::SinkItem)
-        -> Result<AsyncSink<Self::SinkItem>, Done>
+        -> Result<AsyncSink<Self::SinkItem>, private::Done>
     {
         if self.closing {
             self.poll_futures();
             if self.futures.len() == 0 {
-                return Err(Done);
+                return Err(private::Done);
             }
             return Ok(AsyncSink::NotReady(v));
         } else {
@@ -315,11 +305,11 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
             }
         }
     }
-    fn poll_complete(&mut self) -> Result<Async<()>, Done> {
+    fn poll_complete(&mut self) -> Result<Async<()>, private::Done> {
         if self.closing {
             self.poll_futures();
             if self.futures.len() == 0 {
-                return Err(Done);
+                return Err(private::Done);
             }
             return Ok(Async::NotReady);
         } else {
@@ -329,7 +319,7 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
         // flushed
         return Ok(Async::NotReady);
     }
-    fn close(&mut self) -> Result<Async<()>, Done> {
+    fn close(&mut self) -> Result<Async<()>, private::Done> {
         self.start_closing();
         self.poll_futures();
         if self.futures.len() == 0 {
