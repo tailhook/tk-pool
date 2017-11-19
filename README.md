@@ -1,7 +1,7 @@
 Tk-Pool
 =======
 
-**Status: Alpha**
+**Status: Beta**
 
 [Documentation](https://docs.rs/tk-pool) |
 [Github](https://github.com/tailhook/tk-pool) |
@@ -16,7 +16,6 @@ A connection pool implementation for tokio. Main features:
 3. Allows pipelining (multiple in-flight request when multiplexing)
 4. Auto-reconnects on broken connection
 5. Adapts when DNS name change
-6. Can have both eagerly and lazily established connections
 
 Multiple load-balancing strategies are in to do list.
 
