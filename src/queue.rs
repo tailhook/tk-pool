@@ -1,5 +1,6 @@
+use std::fmt;
 use futures::{AsyncSink, Stream, StartSend, Poll, Async};
-use futures::sync::mpsc::{self, channel, Sender, SendError};
+use futures::sync::mpsc::{self, channel, Sender};
 use futures::sink::Sink;
 use futures::stream::Fuse;
 use futures::future::Future;
@@ -24,6 +25,8 @@ pub struct Pool<V, M> {
 
 
 pub struct Done;
+
+pub struct QueueError<V>(V);
 
 
 /// This is similar to `Forward` from `futures` but has metrics and errors
@@ -169,22 +172,19 @@ impl<V, M> Sink for Pool<V, M>
     where M: Collect,
 {
     type SinkItem=V;
-    // TODO(tailhook) make own error
-    type SinkError=SendError<V>;
+    type SinkError=QueueError<V>;
 
     fn start_send(&mut self, item: Self::SinkItem)
         -> StartSend<Self::SinkItem, Self::SinkError>
     {
-        // TODO(tailhook) turn error into SinkError, and flag closed
         match self.channel.start_send(item) {
             Ok(AsyncSink::Ready) => {
                 self.metrics.request_queued();
                 Ok(AsyncSink::Ready)
             }
-            x => x,
+            Ok(AsyncSink::NotReady(item)) => Ok(AsyncSink::NotReady(item)),
+            Err(e) => Err(QueueError(e.into_inner())),
         }
-        // SendError contains actual object, but it also notifies us that
-        // receiver is closed.
     }
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
         // TODO(tailhook) turn closed flag into error
@@ -196,5 +196,43 @@ impl<V, M> Sink for Pool<V, M>
             // to construct a value from nothing
             unreachable!();
         })
+    }
+    fn close(&mut self) -> Poll<(), Self::SinkError> {
+        self.channel.close()
+        .map_err(|_| {
+            // In fact close of the channel does nothing for now
+            // Even if this is fixed there is no sense to return error for
+            // it because error contains a value SinkItem and there is no way
+            // to construct a value from nothing
+            unreachable!();
+        })
+    }
+}
+
+impl<T> QueueError<T> {
+    /// Return ownership of contained message
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+impl<T> fmt::Display for QueueError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("connection pool is closed")
+    }
+}
+
+impl<T> fmt::Debug for QueueError<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("QueueError(_)")
+    }
+}
+
+impl<T> ::std::error::Error for QueueError<T> {
+    fn description(&self) -> &str {
+        "QueueError"
+    }
+    fn cause(&self) -> Option<&::std::error::Error> {
+        None
     }
 }
