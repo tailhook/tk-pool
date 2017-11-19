@@ -10,6 +10,11 @@ pub trait Collect: Clone + Send + Sync {
 
     fn blacklist_add(&self) {}
     fn blacklist_remove(&self) {}
+
+    fn request_queued(&self) {}
+    fn request_forwarded(&self) {}
+
+    fn pool_closed(&self) {}
 }
 
 

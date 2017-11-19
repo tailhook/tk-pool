@@ -106,7 +106,7 @@ impl Aligner {
 
 #[cfg(test)]
 mod test {
-    use std::net::{SocketAddr, IpAddr};
+    use std::net::{SocketAddr};
     use std::collections::HashMap;
     use super::Aligner;
 

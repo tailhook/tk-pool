@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::time::Duration;
 
 use abstract_ns::Address;
@@ -6,7 +5,7 @@ use futures::{Future, Stream, Sink};
 use tokio_core::reactor::Handle;
 use void::Void;
 
-use error_log::WarnLogger;
+use error_log::{ErrorLog, WarnLogger};
 use connect::Connect;
 use metrics::{self, Collect};
 use uniform::LazyUniform;
@@ -24,7 +23,8 @@ pub trait NewQueue<I, M> {
     fn spawn_on<S, E>(self, pool: S, e: E, metrics: M, handle: &Handle)
         -> Self::Pool
         where S: Sink<SinkItem=I, SinkError=Done> + 'static,
-              E: ErrorLog + 'static;
+              E: ErrorLog + 'static,
+              M: Collect + 'static;
 }
 
 /// A constructor for multiplexer
@@ -52,15 +52,6 @@ pub trait NewErrorLog<C, S> {
     type ErrorLog: ErrorLog<ConnectionError=C, SinkError=S>;
     fn construct(self) -> Self::ErrorLog;
 }
-
-pub trait ErrorLog {
-    type ConnectionError;
-    type SinkError;
-    fn connection_error(&self, addr: SocketAddr, e: Self::ConnectionError);
-    fn sink_error(&self, addr: SocketAddr, e: Self::SinkError);
-    fn connection_pool_shut_down(&self);
-}
-
 
 /// A configuration builder that holds onto `Connect` object
 #[derive(Debug)]

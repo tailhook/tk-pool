@@ -1,13 +1,13 @@
+use futures::{AsyncSink, Stream, StartSend, Poll, Async};
 use futures::sync::mpsc::{self, channel, Sender, SendError};
 use futures::sink::Sink;
-use futures::stream::{Stream};
+use futures::stream::Fuse;
 use futures::future::Future;
-use futures::{StartSend, Poll, Async};
 use tokio_core::reactor::Handle;
-use void::{Void, unreachable};
 
 use metrics::Collect;
-use config::{NewQueue, Queue, DefaultQueue, ErrorLog};
+use error_log::{ErrorLog, ShutdownReason};
+use config::{NewQueue, Queue, DefaultQueue};
 
 
 /// Pool is an object you use to access a connection pool
@@ -26,18 +26,16 @@ pub struct Pool<V, M> {
 pub struct Done;
 
 
-/// Wraps mpsc receiver but has a Void error (as real receiver too)
+/// This is similar to `Forward` from `futures` but has metrics and errors
 #[derive(Debug)]
-pub struct Receiver<T> {
-     channel: mpsc::Receiver<T>,
-}
-
-impl<T> Stream for Receiver<T> {
-    type Item = T;
-    type Error = Void;
-    fn poll(&mut self) -> Result<Async<Option<T>>, Void> {
-        self.channel.poll().map_err(|()| unreachable!())
-    }
+pub struct ForwardFuture<S, M, E>
+    where S: Sink
+{
+     receiver: Fuse<mpsc::Receiver<S::SinkItem>>,
+     buffer: Option<S::SinkItem>,
+     metrics: M,
+     errors: E,
+     sink: S,
 }
 
 impl<I: 'static, M> NewQueue<I, M> for DefaultQueue {
@@ -46,6 +44,7 @@ impl<I: 'static, M> NewQueue<I, M> for DefaultQueue {
         -> Self::Pool
         where S: Sink<SinkItem=I, SinkError=Done> + 'static,
               E: ErrorLog + 'static,
+              M: Collect + 'static,
     {
         Queue(100).spawn_on(pool, err, metrics, handle)
     }
@@ -57,17 +56,21 @@ impl<I: 'static, M> NewQueue<I, M> for Queue {
         -> Self::Pool
         where S: Sink<SinkItem=I, SinkError=Done> + 'static,
               E: ErrorLog + 'static,
+              M: Collect + 'static,
     {
-        let (tx, rx) = channel(self.0);
-        handle.spawn(
-            pool.send_all(Receiver {
-                channel: rx,
-            }.map_err(|e| -> Done { unreachable(e) }))
-            .map(move |(_, _)| e.connection_pool_shut_down())
-            .map_err(|_: Done| ()));
+        // one item is buffered ForwardFuture
+        let buf_size = self.0.saturating_sub(1);
+        let (tx, rx) = channel(buf_size);
+        handle.spawn(ForwardFuture {
+            receiver: rx.fuse(),
+            metrics: metrics.clone(),
+            errors: e,
+            sink: pool,
+            buffer: None,
+        });
         return Pool {
             channel: tx,
-            metrics: metrics,
+            metrics,
         };
     }
 }
@@ -85,8 +88,86 @@ impl<V, M: Clone> Clone for Pool<V, M> {
     }
 }
 
+impl<S, M, E> ForwardFuture<S, M, E>
+    where S: Sink<SinkError=Done>,
+          M: Collect,
+          E: ErrorLog,
+{
+    fn poll_forever(&mut self) -> Async<()> {
+        if let Some(item) = self.buffer.take() {
+            match self.sink.start_send(item) {
+                Ok(AsyncSink::Ready) => {
+                    self.metrics.request_forwarded();
+                }
+                Ok(AsyncSink::NotReady(item)) => {
+                    self.buffer = Some(item);
+                    return Async::NotReady;
+                }
+                Err(Done) => return Async::Ready(()),
+            }
+        }
 
-impl<V, M> Sink for Pool<V, M> {
+        let was_done = self.receiver.is_done();
+        loop {
+            match self.receiver.poll() {
+                Ok(Async::Ready(Some(item))) => {
+                    match self.sink.start_send(item) {
+                        Ok(AsyncSink::Ready) => {
+                            self.metrics.request_forwarded();
+                            continue;
+                        }
+                        Ok(AsyncSink::NotReady(item)) => {
+                            self.buffer = Some(item);
+                            return Async::NotReady;
+                        }
+                        Err(Done) => return Async::Ready(()),
+                    }
+                }
+                Ok(Async::Ready(None)) => {
+                    if !was_done {
+                        self.errors.pool_shutting_down(
+                            ShutdownReason::RequestStreamClosed);
+                    }
+                    match self.sink.close() {
+                        Ok(Async::NotReady) => {
+                            return Async::NotReady;
+                        }
+                        Ok(Async::Ready(())) | Err(Done) => {
+                            return Async::Ready(());
+                        }
+                    }
+                }
+                Ok(Async::NotReady) => return Async::NotReady,
+                // No errors in channel receiver
+                Err(()) => unreachable!(),
+            }
+        }
+    }
+}
+
+impl<S, M, E> Future for ForwardFuture<S, M, E>
+    where S: Sink<SinkError=Done>,
+          M: Collect,
+          E: ErrorLog,
+{
+    type Item = ();
+    type Error = ();  // Really Void
+    fn poll(&mut self) -> Result<Async<()>, ()> {
+        match self.poll_forever() {
+            Async::NotReady => Ok(Async::NotReady),
+            Async::Ready(()) => {
+                self.errors.pool_closed();
+                self.metrics.pool_closed();
+                Ok(Async::Ready(()))
+            }
+        }
+    }
+}
+
+
+impl<V, M> Sink for Pool<V, M>
+    where M: Collect,
+{
     type SinkItem=V;
     // TODO(tailhook) make own error
     type SinkError=SendError<V>;
@@ -94,9 +175,14 @@ impl<V, M> Sink for Pool<V, M> {
     fn start_send(&mut self, item: Self::SinkItem)
         -> StartSend<Self::SinkItem, Self::SinkError>
     {
-        // TODO(tailhook) metrics
-        // TODO(tailhook) turn error into NotReady, and flag closed
-        self.channel.start_send(item)
+        // TODO(tailhook) turn error into SinkError, and flag closed
+        match self.channel.start_send(item) {
+            Ok(AsyncSink::Ready) => {
+                self.metrics.request_queued();
+                Ok(AsyncSink::Ready)
+            }
+            x => x,
+        }
         // SendError contains actual object, but it also notifies us that
         // receiver is closed.
     }

@@ -17,7 +17,8 @@ use rand::{thread_rng, Rng};
 use tokio_core::reactor::Handle;
 use void::{Void, unreachable};
 
-use config::{ErrorLog, NewMux};
+use config::{NewMux};
+use error_log::{ErrorLog, ShutdownReason};
 use connect::Connect;
 use metrics::Collect;
 use queue::Done;
@@ -153,6 +154,8 @@ impl<A, C, E, M> Lazy<A, C, E, M>
             match self.address.poll() {
                 Ok(Async::Ready(Some(addr))) => result = Some(addr),
                 Ok(Async::Ready(None)) => {
+                    self.errors.pool_shutting_down(
+                        ShutdownReason::AddressStreamClosed);
                     self.start_closing();
                     result = None;
                     break;
