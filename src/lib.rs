@@ -4,8 +4,6 @@
 //! [Github](https://github.com/tailhook/tk-pool) |
 //! [Crate](https://crates.io/crates/tk-pool)
 //!
-#[warn(missing_docs)]
-#[warn(missing_debug_implementations)]
 #[macro_use] extern crate log;
 extern crate abstract_ns;
 extern crate futures;
