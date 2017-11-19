@@ -4,7 +4,7 @@ use uniform::{FutureOk, FutureErr};
 use uniform::chan::Helper;
 
 
-pub(crate) struct ConnectFuture<F>
+pub(in uniform) struct ConnectFuture<F>
     where F: Future,
           F::Item: Sink,
 {

@@ -6,7 +6,7 @@ use uniform::{FutureOk, FutureErr};
 use uniform::chan::{Action, Helper};
 
 
-pub(crate) struct SinkFuture<S, E>
+pub(in uniform) struct SinkFuture<S, E>
     where S: Sink,
 {
     sink: S,

@@ -1,3 +1,4 @@
+//! A queue (buffer) of requests sent to connection pool
 use std::fmt;
 use futures::{AsyncSink, Stream, StartSend, Poll, Async};
 use futures::sync::mpsc::{self, channel, Sender};
@@ -26,12 +27,16 @@ pub struct Pool<V, M> {
 
 pub struct Done;
 
+
+/// Error returned by the sink, when underlying pool is closed
+///
+/// The error contains underlying item that was sent using `start_send`
 pub struct QueueError<V>(V);
 
 
 /// This is similar to `Forward` from `futures` but has metrics and errors
 #[derive(Debug)]
-pub struct ForwardFuture<S, M, E>
+struct ForwardFuture<S, M, E>
     where S: Sink
 {
      receiver: Fuse<mpsc::Receiver<S::SinkItem>>,

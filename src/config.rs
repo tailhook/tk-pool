@@ -1,3 +1,8 @@
+//! A number of traits to configure connection pool and their implementatons
+//!
+//! Usually you should start with ``pool_for`` and use methods to configure
+//! connection pool instead of poking at these types.
+//!
 use std::time::Duration;
 
 use abstract_ns::Address;
@@ -48,6 +53,7 @@ pub trait NewMux<A, C, E, M>
         -> Self::Sink;
 }
 
+/// A constructor for error log
 pub trait NewErrorLog<C, S> {
     type ErrorLog: ErrorLog<ConnectionError=C, SinkError=S>;
     fn construct(self) -> Self::ErrorLog;

@@ -28,7 +28,7 @@ pub struct Controller<I> {
     pub(in uniform) inner: Rc<RefCell<Inner<I>>>,
 }
 
-pub struct Helper<I> {
+pub(in uniform) struct Helper<I> {
     pub(in uniform) inner: Rc<RefCell<Inner<I>>>,
 }
 

@@ -1,3 +1,10 @@
+//! A uniform connection pool implementation
+//!
+//! Uniform pool has the following properties:
+//!
+//! 1. Attempts to connect same number of connections to every host
+//! 2. Distributes requests by round-robin until pushback happens
+//!
 mod aligner;
 mod chan;
 mod connect;
@@ -29,7 +36,7 @@ use uniform::failures::Blacklist;
 use uniform::sink::SinkFuture;
 
 
-pub enum FutureOk<S>
+enum FutureOk<S>
     where S: Sink
 {
     Connected(Helper<S::SinkItem>, S),
@@ -39,7 +46,7 @@ pub enum FutureOk<S>
     Closed(SocketAddr),
 }
 
-pub enum FutureErr<E, F> {
+enum FutureErr<E, F> {
     CantConnect(SocketAddr, E),
     Disconnected(SocketAddr, F),
 }
@@ -50,7 +57,7 @@ pub struct LazyUniform {
     pub(crate) reconnect_timeout: Duration,
 }
 
-pub struct Connections<I> {
+struct Connections<I> {
     queue: VecDeque<Controller<I>>,
     all: HashSet<Controller<I>>,
 }
