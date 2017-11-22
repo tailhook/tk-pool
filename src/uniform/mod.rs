@@ -298,6 +298,9 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
                 }
                 if let Async::Ready(_) = self.blist.poll() {
                     self.metrics.blacklist_remove();
+                    while let Async::Ready(_) = self.blist.poll() {
+                        self.metrics.blacklist_remove();
+                    }
                 } else {
                     // log backpressure issue, not sure how
                     return Ok(AsyncSink::NotReady(v));
@@ -314,6 +317,9 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
             return Ok(Async::NotReady);
         } else {
             self.poll_futures();
+            while let Async::Ready(_) = self.blist.poll() {
+                self.metrics.blacklist_remove();
+            }
         }
         // TODO(tailhook) maybe we can track if connections have everything
         // flushed
