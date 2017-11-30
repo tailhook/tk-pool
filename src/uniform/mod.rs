@@ -220,6 +220,7 @@ impl<A, C, E, M> Lazy<A, C, E, M>
                 Ok(Async::Ready(None)) => break,
                 Ok(Async::Ready(Some(FutureOk::Connected(task, sink)))) => {
                     self.metrics.connection();
+                    debug!("Connected to {}", task.addr());
                     // helper will add itself to the active queue on wakeup
                     self.futures.push(Box::new(SinkFuture::new(sink, task)));
                 }

@@ -29,7 +29,28 @@ impl<S: Sink, E> Future for SinkFuture<S, E> {
         match self.task.take() {
             Action::StartSend(item) => match self.sink.start_send(item) {
                 Ok(AsyncSink::Ready) => {
-                    Ok(Async::NotReady)
+                    // We need to flush data immediately because there is
+                    // no way to schedule a wakeup on poll_complete of parent
+                    // schedule
+                    //
+                    // TODO(tailhook) we might want to fix it by wrapping the
+                    //                future into a refcell and calling
+                    //                start_send manually instead of through
+                    //                futures unordered.
+                    match self.sink.poll_complete() {
+                        Ok(_)  => {
+                            // By contract there is no difference in Ready and
+                            // NotReady I.e. both of them may mean that another
+                            // element can be pushed now. They only distinquish
+                            // whether there is something left in the buffer.
+                            self.task.requeue();
+                            Ok(Async::NotReady)
+                        }
+                        Err(e) => {
+                            self.task.closed();
+                            Err(FutureErr::Disconnected(self.task.addr(), e))
+                        }
+                    }
                 }
                 Ok(AsyncSink::NotReady(item)) => {
                     self.task.backpressure(item);

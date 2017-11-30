@@ -32,6 +32,7 @@ pub struct QueueError<V>(V);
 
 /// This is similar to `Forward` from `futures` but has metrics and errors
 #[derive(Debug)]
+#[must_use = "futures do nothing unless polled"]
 struct ForwardFuture<S, M, E>
     where S: Sink
 {
@@ -141,7 +142,14 @@ impl<S, M, E> ForwardFuture<S, M, E>
                         }
                     }
                 }
-                Ok(Async::NotReady) => return Async::NotReady,
+                Ok(Async::NotReady) => match self.sink.poll_complete() {
+                    Ok(_) => {
+                        return Async::NotReady;
+                    }
+                    Err(private::Done) => {
+                        return Async::Ready(());
+                    }
+                }
                 // No errors in channel receiver
                 Err(()) => unreachable!(),
             }
