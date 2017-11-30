@@ -41,9 +41,9 @@ fn main() {
         .done();
     let mut pool =
         pool_for(move |addr| Proto::connect_tcp(addr, &connection_config, &h2))
-        .connect_to(ns.subscribe_many(&["httpbin.org:80"], 80))
+        .connect_to(ns.subscribe_many(&["httpbin.org"], 80))
         .lazy_uniform_connections(2)
-        .with_queue_size(10)
+        .with_queue_size(16)
         .spawn_on(&lp.handle())
         // This is needed for Client trait, (i.e. so that `.fetch_url()` works)
         // May be fixed in tk-http in future
@@ -58,13 +58,14 @@ fn main() {
     //         .with_queue_size(10)))
     //     .spawn_on(&lp.handle());
 
-    println!("We will send 10 requests over 2 connections (per ip). \
+    println!("We will send 16 requests over 1 connection per ip. \
               Each requests hangs for 5 seconds at the server side \
-              (a feature of httpbin.org). So expect script to finish \
-              in 25 seconds with first response coming in 5 seconds.");
+              (a feature of httpbin.org). Since httpbin nowadays has \
+              many IPs, expect script to finish in 5 or 10 seconds \
+              with first response coming in 5 seconds.");
 
     lp.run(futures::lazy(|| {
-        join_all((0..10).map(move |_| {
+        join_all((0..16).map(move |_| {
             pool
             .fetch_url("http://httpbin.org/delay/5")
             .map(|r| {
