@@ -79,6 +79,9 @@ impl<I> Connections<I> {
         }
         self.queue.push_back(ctr);
     }
+    fn has_ready(&self) -> bool {
+        self.queue.len() > 0
+    }
     fn next(&mut self) -> Option<Controller<I>> {
         self.queue.pop_front()
         .map(|ctr| {
@@ -285,7 +288,10 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
                         return Ok(AsyncSink::Ready);
                     }
                 } else {
-                    break;
+                    self.poll_futures();
+                    if !self.connections.borrow().has_ready() {
+                        break;
+                    }
                 }
             }
             loop {
