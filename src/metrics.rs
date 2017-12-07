@@ -7,13 +7,13 @@ pub trait Collect: Clone + Send + Sync {
     /// This pairs either with ``connection`` on success
     /// or ``connection_abort`` and ``connection_error`` on error
     fn connection_attempt(&self) {}
+    /// Error establishing connection
+    fn connection_error(&self) {}
 
     /// Aborted connection attempt (name changed, and doesn't include address)
     fn connection_abort(&self) {}
     /// Connection established successfully
     fn connection(&self) {}
-    /// Error establishing connection or forwarding request throught it
-    fn connection_error(&self) {}
     /// Connection closed (usully means name changed)
     fn disconnect(&self) {}
 
