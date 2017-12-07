@@ -215,6 +215,36 @@ impl<C, A, X, Q, E, M> PoolConfig<C, A, X, Q, E, M> {
             metrics: self.metrics,
         }
     }
+
+    /// Override metrics reporter
+    pub fn metrics<NM>(self, metrics: NM)
+        -> PoolConfig<C, A, X, Q, E, NM>
+        where NM: NewMetrics,
+    {
+        PoolConfig {
+            queue: self.queue,
+            address: self.address,
+            connector: self.connector,
+            mux: self.mux,
+            errors: self.errors,
+            metrics: metrics,
+        }
+    }
+
+    /// Override error reporter
+    pub fn errors<NE>(self, errors: NE)
+        -> PoolConfig<C, A, X, Q, NE, M>
+        where NE: ErrorLog,
+    {
+        PoolConfig {
+            queue: self.queue,
+            address: self.address,
+            connector: self.connector,
+            mux: self.mux,
+            errors: errors,
+            metrics: self.metrics,
+        }
+    }
 }
 
 
