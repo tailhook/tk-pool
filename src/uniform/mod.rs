@@ -274,43 +274,48 @@ impl<A, C, E, M> Sink for Lazy<A, C, E, M>
             return Ok(AsyncSink::NotReady(v));
         } else {
             self.check_for_address_updates();
-            loop {
-                let ctr = self.connections.borrow_mut().next();
-                if let Some(ctr) = ctr {
-                    if ctr.is_closed() { continue }
-                    ctr.request(v);
-                    self.poll_futures();
-                    if let Some(request) = ctr.request_back() {
-                        v = request;
-                        continue;
+            'outer: loop {
+                loop {
+                    let ctr = self.connections.borrow_mut().next();
+                    if let Some(ctr) = ctr {
+                        if ctr.is_closed() { continue }
+                        ctr.request(v);
+                        self.poll_futures();
+                        if let Some(request) = ctr.request_back() {
+                            v = request;
+                            continue;
+                        } else {
+                            // Note: we assume that controller put itself back
+                            // to the active queue
+                            return Ok(AsyncSink::Ready);
+                        }
                     } else {
-                        // Note: we assume that controller put itself back
-                        // to the active queue
-                        return Ok(AsyncSink::Ready);
-                    }
-                } else {
-                    self.poll_futures();
-                    if !self.connections.borrow().has_ready() {
-                        break;
+                        self.poll_futures();
+                        if !self.connections.borrow().has_ready() {
+                            break;
+                        }
                     }
                 }
-            }
-            loop {
-                while let Some(addr) = self.do_connect() {
-                    self.poll_futures();
-                    if !self.blist.is_failing(addr) {
-                        // Waiting for connect
+                loop {
+                    while let Some(addr) = self.do_connect() {
+                        self.poll_futures();
+                        if self.connections.borrow().has_ready() {
+                            continue 'outer;
+                        }
+                        if !self.blist.is_failing(addr) {
+                            // Waiting for connect
+                            return Ok(AsyncSink::NotReady(v));
+                        }
+                    }
+                    if let Async::Ready(_) = self.blist.poll() {
+                        self.metrics.blacklist_remove();
+                        while let Async::Ready(_) = self.blist.poll() {
+                            self.metrics.blacklist_remove();
+                        }
+                    } else {
+                        // log backpressure issue, not sure how
                         return Ok(AsyncSink::NotReady(v));
                     }
-                }
-                if let Async::Ready(_) = self.blist.poll() {
-                    self.metrics.blacklist_remove();
-                    while let Async::Ready(_) = self.blist.poll() {
-                        self.metrics.blacklist_remove();
-                    }
-                } else {
-                    // log backpressure issue, not sure how
-                    return Ok(AsyncSink::NotReady(v));
                 }
             }
         }
