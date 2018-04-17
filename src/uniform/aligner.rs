@@ -3,7 +3,7 @@ use std::collections::{HashSet, HashMap, BTreeMap};
 use std::collections::btree_map::Entry::{Occupied};
 use std::net::SocketAddr;
 
-use rand::{thread_rng, sample};
+use rand::{thread_rng, seq::sample_iter};
 
 
 pub(crate) struct Aligner {
@@ -64,9 +64,9 @@ impl Aligner {
             if n >= limit {
                 return None;
             }
-            let mut candidate = sample(&mut thread_rng(),
+            let mut candidate = sample_iter(&mut thread_rng(),
                 addrs.iter().filter(|&&x| !blist(x)).map(|&x| x),
-                1);
+                1).unwrap_or_else(|v| v);
             match candidate.pop() {
                 Some(a) => {
                     addrs.remove(&a);

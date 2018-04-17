@@ -23,7 +23,7 @@ fn main() {
     if let Err(_) = env::var("RUST_LOG") {
         env::set_var("RUST_LOG", "warn");
     }
-    env_logger::init().unwrap();
+    env_logger::init();
 
     let mut lp = tokio_core::reactor::Core::new().unwrap();
     let h1 = lp.handle();
